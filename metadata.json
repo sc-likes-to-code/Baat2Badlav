@@ -1,0 +1,6 @@
+{
+  "name": "Baat2Badlav",
+  "description": "From Citizen Voices to Development Intelligence. Transforming multilingual citizen demand, infrastructure baselines, and demographic exposure into actionable civic evidence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
