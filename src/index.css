@@ -16,13 +16,18 @@
   }
 
   html {
-    scroll-behavior: smooth;
     font-family: var(--font-sans);
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #c4c5d6 transparent;
   }
 
   body {
     background-color: var(--brand-ivory);
     color: var(--brand-dark);
+    overflow-x: hidden;
+    min-height: 100vh;
   }
 
   /* Ensure all clickable and interactive elements display pointer cursor globally */
@@ -92,6 +97,15 @@
   }
   ::-webkit-scrollbar-thumb:hover {
     background: #747685;
+  }
+
+  /* Utility to hide scrollbars for cleanly styled horizontal scroll views */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
 }
 

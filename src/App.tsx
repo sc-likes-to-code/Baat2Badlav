@@ -41,8 +41,12 @@ export default function App() {
   const [currentInterpretation, setCurrentInterpretation] = useState<CitizenAIInterpretation | null>(null);
   const [formDraft, setFormDraft] = useState<CitizenFormDraft | null>(null);
 
-  // Sync with browser navigation (popstate)
+  // Sync with browser navigation (popstate) and disable automatic scroll jump on reload
   useEffect(() => {
+    if (typeof window !== 'undefined' && 'scrollRestoration' in window.history) {
+      window.history.scrollRestoration = 'manual';
+    }
+
     const handlePopState = () => {
       const hash = window.location.hash.replace('#', '');
       if (hash && hash.startsWith('/')) {
@@ -141,17 +145,17 @@ export default function App() {
       {/* Top Reusable Navbar */}
       <Navbar currentPath={currentPath} onNavigate={handleNavigate} />
 
-      {/* Main Screen Content with Subtle Framer Motion Page Transition */}
-      <main className="flex-1 overflow-x-hidden relative">
-        <AnimatePresence mode="wait">
+      {/* Main Screen Content with Stable Page Transition */}
+      <main className="flex-1 relative w-full">
+        <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={currentPath}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             transition={{
-              duration: 0.25,
-              ease: [0.25, 0.1, 0.25, 1],
+              duration: 0.18,
+              ease: 'easeInOut',
             }}
             className="w-full h-full flex flex-col flex-1"
           >
