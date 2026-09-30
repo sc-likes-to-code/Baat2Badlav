@@ -131,7 +131,14 @@ export default function App() {
       );
     }
     if (currentPath.startsWith('/dashboard/region')) {
-      return <RegionIntelligencePage onNavigate={handleNavigate} />;
+      return (
+        <RegionIntelligencePage
+          onNavigate={handleNavigate}
+          currentPath={currentPath}
+          liveSubmission={currentSubmission}
+          liveInterpretation={currentInterpretation}
+        />
+      );
     }
     if (currentPath === '/trust') {
       return <TrustDataPage onNavigate={handleNavigate} />;

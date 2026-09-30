@@ -1,920 +1,1510 @@
-import React, { useState } from 'react';
-import { NADIA_INTERVENTIONS } from '../data/mockData';
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React, { useState, useMemo } from 'react';
+import { CivicCategory, CitizenSubmission, CitizenAIInterpretation } from '../types/citizen';
+import { DemandHotspot } from '../types/demand';
+import { DevelopmentGap } from '../types/development';
+import { PriorityAssessment } from '../types/priority';
+import { CandidateProject } from '../types/project';
+import { ImpactScenario } from '../types/impact';
+
+import { SYNTHETIC_CITIZEN_REPORTS } from '../data/syntheticCitizenReports';
+import {
+  getInfrastructureProfile,
+  getDemographicProfile,
+  getInvestmentProfile,
+} from '../data/syntheticDevelopmentContext';
+import {
+  PROTOTYPE_DISTRICTS_BY_STATE,
+  getStateName,
+} from '../data/locations';
+
+import { clusterCitizenSubmissions, deriveDemandHotspots, SubmissionWithInterpretation } from '../services/clusteringService';
+import { calculateDevelopmentGaps } from '../services/developmentGapService';
+import { calculatePriorityAssessments } from '../services/priorityService';
+import { generateCandidateProjects } from '../services/projectService';
+import { simulateImpact, PRESET_SCENARIOS } from '../services/impactSimulationService';
 
 interface RegionIntelligencePageProps {
   onNavigate: (path: string) => void;
+  currentPath?: string;
+  liveSubmission?: CitizenSubmission | null;
+  liveInterpretation?: CitizenAIInterpretation | null;
 }
 
-export const RegionIntelligencePage: React.FC<RegionIntelligencePageProps> = ({ onNavigate }) => {
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string>('opt-1');
-  const activeScenario = NADIA_INTERVENTIONS[selectedScenarioId];
+// Prototype districts available for drill-down
+const PROTOTYPE_DISTRICT_KEYS = ['nadia', 'murshidabad', 'kalahandi', 'gaya', 'muzaffarpur', 'patna'];
 
-  const handleExportPDF = () => {
-    window.print();
+export const RegionIntelligencePage: React.FC<RegionIntelligencePageProps> = ({
+  onNavigate,
+  currentPath = '/dashboard/region/nadia',
+  liveSubmission,
+  liveInterpretation,
+}) => {
+  // 1. Extract District ID from currentPath or fallback
+  const rawIdFromPath = currentPath.split('/dashboard/region/')[1]?.split('/')[0]?.split('?')[0]?.split('#')[0] || '';
+  const selectedDistrictId = (rawIdFromPath || 'nadia').toLowerCase().trim();
+
+  // 2. State for lightweight filtering
+  const [selectedDomainFilter, setSelectedDomainFilter] = useState<string>('ALL');
+  const [selectedPriorityFilter, setSelectedPriorityFilter] = useState<string>('ALL');
+  const [selectedGapFilter, setSelectedGapFilter] = useState<string>('ALL');
+
+  // 3. State for interactive simulation section
+  const [activeProjectId, setActiveProjectId] = useState<string>('');
+  const [scenarioCoverage, setScenarioCoverage] = useState<number>(60);
+  const [scenarioEffectiveness, setScenarioEffectiveness] = useState<number>(75);
+  const [activePreset, setActivePreset] = useState<'conservative' | 'balanced' | 'highCoverage' | 'custom'>('balanced');
+
+  // 4. Traceability inspection state
+  const [selectedTraceProject, setSelectedTraceProject] = useState<string | null>(null);
+
+  // 5. Lookup district metadata
+  const districtMeta = useMemo(() => {
+    for (const [sId, dList] of Object.entries(PROTOTYPE_DISTRICTS_BY_STATE)) {
+      const found = dList.find((d) => d.id.toLowerCase() === selectedDistrictId);
+      if (found) {
+        return {
+          id: found.id,
+          name: found.name,
+          stateId: sId,
+          stateName: getStateName(sId),
+          isValid: true,
+        };
+      }
+    }
+    // Check fallback for any custom key
+    if (selectedDistrictId === 'nadia') return { id: 'nadia', name: 'Nadia', stateId: 'WB', stateName: 'West Bengal', isValid: true };
+    if (selectedDistrictId === 'murshidabad') return { id: 'murshidabad', name: 'Murshidabad', stateId: 'WB', stateName: 'West Bengal', isValid: true };
+    if (selectedDistrictId === 'kalahandi') return { id: 'kalahandi', name: 'Kalahandi', stateId: 'OD', stateName: 'Odisha', isValid: true };
+    if (selectedDistrictId === 'gaya') return { id: 'gaya', name: 'Gaya', stateId: 'BR', stateName: 'Bihar', isValid: true };
+    if (selectedDistrictId === 'muzaffarpur') return { id: 'muzaffarpur', name: 'Muzaffarpur', stateId: 'BR', stateName: 'Bihar', isValid: true };
+    if (selectedDistrictId === 'patna') return { id: 'patna', name: 'Patna', stateId: 'BR', stateName: 'Bihar', isValid: true };
+
+    return {
+      id: selectedDistrictId,
+      name: selectedDistrictId.charAt(0).toUpperCase() + selectedDistrictId.slice(1),
+      stateId: 'UNKNOWN',
+      stateName: 'Unknown State',
+      isValid: false,
+    };
+  }, [selectedDistrictId]);
+
+  // 6. Assemble all reports (synthetic + live)
+  const allReports: SubmissionWithInterpretation[] = useMemo(() => {
+    const records = [...SYNTHETIC_CITIZEN_REPORTS];
+    if (liveSubmission && liveInterpretation) {
+      records.push({
+        submission: liveSubmission,
+        interpretation: liveInterpretation,
+      });
+    }
+    return records;
+  }, [liveSubmission, liveInterpretation]);
+
+  // 7. Execute deterministic downstream pipeline
+  const pipelineData = useMemo(() => {
+    const clusters = clusterCitizenSubmissions(allReports);
+    const hotspots = deriveDemandHotspots(clusters);
+    const gaps = calculateDevelopmentGaps(hotspots);
+    const priorities = calculatePriorityAssessments(gaps, hotspots);
+    const projects = generateCandidateProjects(priorities);
+
+    return { clusters, hotspots, gaps, priorities, projects };
+  }, [allReports]);
+
+  // 8. Filter data specifically for this region
+  const regionRawReports = useMemo(() => {
+    return allReports.filter(
+      (r) => r.submission.location.districtId.toLowerCase() === selectedDistrictId
+    );
+  }, [allReports, selectedDistrictId]);
+
+  const regionHotspots = useMemo(() => {
+    return pipelineData.hotspots.filter(
+      (h) => h.districtId.toLowerCase() === selectedDistrictId
+    );
+  }, [pipelineData.hotspots, selectedDistrictId]);
+
+  const regionGaps = useMemo(() => {
+    return pipelineData.gaps.filter(
+      (g) => g.districtId.toLowerCase() === selectedDistrictId
+    );
+  }, [pipelineData.gaps, selectedDistrictId]);
+
+  const regionPriorities = useMemo(() => {
+    return pipelineData.priorities.filter(
+      (p) => p.districtId.toLowerCase() === selectedDistrictId
+    );
+  }, [pipelineData.priorities, selectedDistrictId]);
+
+  const regionProjects = useMemo(() => {
+    return pipelineData.projects.filter(
+      (p) => p.districtId.toLowerCase() === selectedDistrictId
+    );
+  }, [pipelineData.projects, selectedDistrictId]);
+
+  // 9. Contextual Profiles
+  const infraProfile = useMemo(() => {
+    return getInfrastructureProfile(selectedDistrictId);
+  }, [selectedDistrictId]);
+
+  const demoProfile = useMemo(() => {
+    return getDemographicProfile(selectedDistrictId);
+  }, [selectedDistrictId]);
+
+  const investProfile = useMemo(() => {
+    return getInvestmentProfile(selectedDistrictId);
+  }, [selectedDistrictId]);
+
+  // 10. Filtered subsets based on interactive filters
+  const filteredHotspots = useMemo(() => {
+    return regionHotspots.filter((h) => {
+      if (selectedDomainFilter !== 'ALL' && h.domain !== selectedDomainFilter) return false;
+      return true;
+    });
+  }, [regionHotspots, selectedDomainFilter]);
+
+  const filteredGaps = useMemo(() => {
+    return regionGaps.filter((g) => {
+      if (selectedDomainFilter !== 'ALL' && g.civicDomain !== selectedDomainFilter) return false;
+      if (selectedGapFilter !== 'ALL' && g.gapLevel !== selectedGapFilter) return false;
+      return true;
+    });
+  }, [regionGaps, selectedDomainFilter, selectedGapFilter]);
+
+  const filteredPriorities = useMemo(() => {
+    return regionPriorities.filter((p) => {
+      if (selectedDomainFilter !== 'ALL' && p.civicDomain !== selectedDomainFilter) return false;
+      if (selectedPriorityFilter !== 'ALL' && p.priorityBand !== selectedPriorityFilter) return false;
+      return true;
+    });
+  }, [regionPriorities, selectedDomainFilter, selectedPriorityFilter]);
+
+  const filteredProjects = useMemo(() => {
+    return regionProjects.filter((p) => {
+      if (selectedDomainFilter !== 'ALL' && p.civicDomain !== selectedDomainFilter) return false;
+      return true;
+    });
+  }, [regionProjects, selectedDomainFilter]);
+
+  // 11. Domain distribution stats
+  const domainDistribution = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const r of regionRawReports) {
+      const dom = r.interpretation.civicDomain || r.submission.category || 'Other';
+      counts[dom] = (counts[dom] || 0) + 1;
+    }
+    const total = regionRawReports.length || 1;
+    return Object.entries(counts).map(([domain, count]) => ({
+      domain,
+      count,
+      pct: Math.round((count / total) * 100),
+    }));
+  }, [regionRawReports]);
+
+  // 12. Active project for simulation
+  const activeProject = useMemo(() => {
+    if (activeProjectId) {
+      const found = regionProjects.find((p) => p.id === activeProjectId);
+      if (found) return found;
+    }
+    return regionProjects.length > 0 ? regionProjects[0] : null;
+  }, [activeProjectId, regionProjects]);
+
+  const activePriorityForSimulation = useMemo(() => {
+    if (!activeProject) return null;
+    return pipelineData.priorities.find((p) => p.id === activeProject.priorityAssessmentId) || null;
+  }, [activeProject, pipelineData.priorities]);
+
+  const activeGapForSimulation = useMemo(() => {
+    if (!activePriorityForSimulation) return null;
+    return pipelineData.gaps.find((g) => g.id === activePriorityForSimulation.developmentGapId) || null;
+  }, [activePriorityForSimulation, pipelineData.gaps]);
+
+  const simulationResult = useMemo(() => {
+    if (!activeProject || !activePriorityForSimulation || !activeGapForSimulation) return null;
+
+    const scenario: ImpactScenario = {
+      id: `scen-${activeProject.id}`,
+      candidateProjectId: activeProject.id,
+      priorityAssessmentId: activePriorityForSimulation.id,
+      developmentGapId: activeGapForSimulation.id,
+      scenarioName: activePreset,
+      interventionCoverage: scenarioCoverage,
+      implementationEffectiveness: scenarioEffectiveness,
+    };
+
+    return simulateImpact(activeProject, activePriorityForSimulation, activeGapForSimulation, scenario);
+  }, [activeProject, activePriorityForSimulation, activeGapForSimulation, scenarioCoverage, scenarioEffectiveness, activePreset]);
+
+  // Preset Handler
+  const handlePresetSelect = (presetKey: 'conservative' | 'balanced' | 'highCoverage') => {
+    const cfg = PRESET_SCENARIOS[presetKey];
+    setScenarioCoverage(cfg.coverage);
+    setScenarioEffectiveness(cfg.effectiveness);
+    setActivePreset(presetKey);
   };
 
-  return (
-    <main className="w-full bg-[#f9f9fc] min-h-[calc(100vh-20rem)] text-[#1a1c1e] pb-16">
-      {/* Top Dossier Meta Bar & Breadcrumbs */}
-      <div className="w-full bg-[#f3f3f6]/70 py-2 border-b border-stone-200">
-        <div className="max-w-[1360px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex items-center gap-1.5 text-[#444653] flex-wrap">
-            <button onClick={() => onNavigate('/dashboard')} className="hover:underline cursor-pointer">
-              Development Intelligence
-            </button>
-            <span className="text-[#c4c5d6] font-mono">/</span>
-            <span>West Bengal</span>
-            <span className="text-[#c4c5d6] font-mono">/</span>
-            <span className="font-semibold text-[#1a1c1e]">Nadia</span>
-            <span className="text-[#c4c5d6] font-mono">/</span>
-            <span className="text-[#033aaf] font-semibold">Roads &amp; Mobility</span>
+  // Slider change handler
+  const handleSliderChange = (type: 'coverage' | 'effectiveness', value: number) => {
+    if (type === 'coverage') setScenarioCoverage(value);
+    if (type === 'effectiveness') setScenarioEffectiveness(value);
+    setActivePreset('custom');
+  };
+
+  // 13. Summary Metrics
+  const avgGapScore = useMemo(() => {
+    if (regionGaps.length === 0) return 0;
+    const sum = regionGaps.reduce((acc, g) => acc + g.developmentGapScore, 0);
+    return Math.round(sum / regionGaps.length);
+  }, [regionGaps]);
+
+  const criticalSignalCount = useMemo(() => {
+    return regionPriorities.filter((p) => p.priorityBand === 'Critical Signal').length;
+  }, [regionPriorities]);
+
+  // =========================================================================
+  // INVALID REGION STATE
+  // =========================================================================
+  if (!districtMeta.isValid) {
+    return (
+      <main className="w-full bg-[#f9f9fc] min-h-[calc(100vh-14rem)] text-[#1a1c1e] py-16">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center space-y-6">
+          <div className="w-16 h-16 rounded-2xl bg-amber-100 text-amber-800 flex items-center justify-center mx-auto shadow-xs border border-amber-200">
+            <span className="material-symbols-outlined text-3xl">wrong_location</span>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[#e8e8ea] text-[#444653] text-[10px] font-mono">
-              Nadia Basin Cluster · 17 GPs
+
+          <div className="space-y-2">
+            <span className="text-xs font-mono font-bold uppercase tracking-wider text-amber-800 bg-amber-50 px-3 py-1 rounded-full border border-amber-200">
+              Region Not Found
             </span>
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[#004f49]/10 text-[#004f49] text-[10px] font-mono font-semibold">
-              Updated · Q3 Demo Cycle
+            <h1 className="text-3xl font-extrabold text-[#1a1c1e] tracking-tight">
+              District &ldquo;{selectedDistrictId}&rdquo; is not currently indexed
+            </h1>
+            <p className="text-sm text-[#444653] max-w-xl mx-auto leading-relaxed">
+              The requested regional dossier identifier is not in the active prototype demonstration catalog. You can explore one of our fully indexed districts below or return to the master intelligence dashboard.
+            </p>
+          </div>
+
+          {/* Quick switcher cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-4 max-w-2xl mx-auto">
+            {PROTOTYPE_DISTRICT_KEYS.map((dKey) => {
+              const profile = getInfrastructureProfile(dKey);
+              return (
+                <button
+                  key={dKey}
+                  onClick={() => onNavigate(`/dashboard/region/${dKey}`)}
+                  className="p-4 rounded-xl bg-white border border-stone-200 hover:border-[#033aaf] hover:shadow-md transition-all text-left group cursor-pointer"
+                >
+                  <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold block">
+                    {profile.stateName}
+                  </span>
+                  <span className="text-base font-bold text-[#1a1c1e] group-hover:text-[#033aaf] transition-colors block">
+                    {profile.districtName}
+                  </span>
+                  <span className="text-xs text-stone-500 font-mono mt-1 block">
+                    Open Dossier →
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="pt-6">
+            <button
+              onClick={() => onNavigate('/dashboard')}
+              className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full bg-[#111315] hover:bg-stone-800 text-white text-sm font-semibold transition-all shadow-sm cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-base">arrow_back</span>
+              <span>Back to Master Dashboard</span>
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // =========================================================================
+  // VALID REGION VIEW
+  // =========================================================================
+  return (
+    <main className="w-full bg-[#f9f9fc] min-h-[calc(100vh-14rem)] text-[#1a1c1e] pb-24">
+      {/* Top Breadcrumbs & Regional Sub-Bar */}
+      <div className="w-full bg-[#f3f3f6]/80 py-2.5 border-b border-stone-200/80 sticky top-16 z-30 backdrop-blur-md">
+        <div className="max-w-[1360px] mx-auto px-4 sm:px-6 lg:px-8 flex flex-wrap items-center justify-between gap-3 text-xs">
+          {/* Breadcrumb */}
+          <div className="flex items-center gap-2 text-[#444653] flex-wrap">
+            <button
+              onClick={() => onNavigate('/dashboard')}
+              className="hover:underline text-[#033aaf] font-semibold cursor-pointer flex items-center gap-1"
+            >
+              <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+              <span>Dashboard</span>
+            </button>
+            <span className="text-stone-300 font-mono">/</span>
+            <span>{districtMeta.stateName}</span>
+            <span className="text-stone-300 font-mono">/</span>
+            <span className="font-bold text-[#1a1c1e]">{districtMeta.name}</span>
+            <span className="text-stone-300 font-mono">/</span>
+            <span className="text-stone-500 font-mono">Region Intelligence</span>
+          </div>
+
+          {/* Quick District Switcher Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 no-scrollbar">
+            <span className="text-[10px] font-mono uppercase text-stone-500 font-bold mr-1 hidden sm:inline">
+              Switch District:
             </span>
+            {PROTOTYPE_DISTRICT_KEYS.map((dKey) => {
+              const isCurrent = dKey === selectedDistrictId;
+              const name = dKey.charAt(0).toUpperCase() + dKey.slice(1);
+              return (
+                <button
+                  key={dKey}
+                  onClick={() => onNavigate(`/dashboard/region/${dKey}`)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-mono transition-all cursor-pointer whitespace-nowrap ${
+                    isCurrent
+                      ? 'bg-[#033aaf] text-white font-bold shadow-xs'
+                      : 'bg-white hover:bg-stone-100 text-stone-700 border border-stone-200'
+                  }`}
+                >
+                  {name}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      <div className="max-w-[1360px] mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-10">
+      <div className="max-w-[1360px] mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-10">
         
-        {/* Section 1: Region Dossier Header */}
-        <section className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80 flex flex-col lg:flex-row justify-between gap-6">
-          <div className="flex flex-col gap-1 max-w-3xl">
-            <div className="flex items-center gap-1.5 text-[#033aaf] text-[10px] font-mono tracking-wider uppercase font-bold">
-              <span className="material-symbols-outlined text-[16px]">folder_supervised</span>
-              <span>REGION INTELLIGENCE · GEOSPATIAL DOSSIER #WB-NAD-842</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2.5 my-1">
-              <h1 className="text-3xl sm:text-4xl font-extrabold text-[#1a1c1e] tracking-tight">
-                Nadia · West Bengal
-              </h1>
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-[#ba1a1a]/10 text-[#ba1a1a] text-[11px] font-mono font-bold">
-                ● HIGH DEVELOPMENT GAP
+        {/* ================================================================= */}
+        {/* HEADER: Region Dossier Summary */}
+        {/* ================================================================= */}
+        <section className="bg-white rounded-2xl p-6 sm:p-8 shadow-xs border border-stone-200/80 flex flex-col lg:flex-row justify-between gap-6">
+          <div className="space-y-3 max-w-3xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#033aaf]/10 text-[#033aaf] text-[10px] font-mono tracking-widest uppercase font-bold">
+                <span className="material-symbols-outlined text-[14px]">folder_supervised</span>
+                Region Intelligence Dossier
+              </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-600 text-[10px] font-mono border border-stone-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#0F766E] animate-pulse"></span>
+                Synthetic Demonstration Data
               </span>
             </div>
-            <p className="text-lg font-semibold text-[#444653]">
-              Road Accessibility // Monsoon-Related Disruption
-            </p>
-            <p className="text-sm text-[#444653] mt-1 leading-relaxed">
-              A concentrated citizen-demand signal associated with recurring monsoon road inundation and physical access severance across 17 contiguous Gram Panchayats.
+
+            <h1 className="text-3xl sm:text-4xl font-extrabold text-[#1a1c1e] tracking-tight">
+              {districtMeta.name} <span className="text-stone-400 font-normal">·</span> {districtMeta.stateName}
+            </h1>
+
+            <p className="text-sm sm:text-base text-[#444653] leading-relaxed">
+              Multi-dimensional development intelligence synthesized from localized citizen demand signals, official-format infrastructure baselines, and demographic exposure across {districtMeta.name} district.
             </p>
           </div>
 
-          {/* Regional Context Summary Matrix */}
-          <div className="flex flex-col justify-between bg-[#f3f3f6] rounded-xl p-5 min-w-[280px] border border-stone-200">
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="flex flex-col">
-                <span className="text-2xl font-mono font-bold text-[#033aaf]">17</span>
-                <span className="text-[10px] font-mono text-[#444653] uppercase">Villages / GPs</span>
+          {/* Quick Stat Pill Matrix */}
+          <div className="flex flex-col justify-between bg-[#f3f3f6] rounded-xl p-5 min-w-[280px] border border-stone-200/80 space-y-4">
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div>
+                <span className="text-2xl font-mono font-bold text-[#033aaf] block">
+                  {regionRawReports.length}
+                </span>
+                <span className="text-[10px] font-mono text-stone-500 uppercase">Citizen Voices</span>
               </div>
-              <div className="flex flex-col">
-                <span className="text-2xl font-mono font-bold text-[#1a1c1e]">72.4k</span>
-                <span className="text-[10px] font-mono text-[#444653] uppercase">Exposed Pop</span>
+              <div>
+                <span className="text-2xl font-mono font-bold text-[#1a1c1e] block">
+                  {regionHotspots.length}
+                </span>
+                <span className="text-[10px] font-mono text-stone-500 uppercase">Hotspots</span>
               </div>
-              <div className="flex flex-col">
-                <span className="text-2xl font-mono font-bold text-[#9e4200]">1,284</span>
-                <span className="text-[10px] font-mono text-[#444653] uppercase">Citizen Reqs</span>
+              <div>
+                <span className="text-2xl font-mono font-bold text-[#E06D28] block">
+                  {regionProjects.length}
+                </span>
+                <span className="text-[10px] font-mono text-stone-500 uppercase">Projects</span>
               </div>
             </div>
-            <div className="mt-4 pt-2 border-t border-stone-200 text-center">
-              <span className="text-[11px] font-mono text-[#747685] block">
-                Representative demonstration dataset · Configurable weights
+
+            <div className="pt-3 border-t border-stone-200 text-center">
+              <span className="text-[11px] font-mono text-stone-500 block">
+                Population: {(demoProfile.population / 1000000).toFixed(2)}M · Rural: {Math.round((demoProfile.ruralPopulationShare ?? 0.7) * 100)}%
               </span>
             </div>
           </div>
         </section>
 
-        {/* Section 2: Development Gap Score & 6-Factor Decomposition */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left: Score Box */}
-          <div className="lg:col-span-4 bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80 flex flex-col justify-between">
-            <div className="flex flex-col gap-1">
+        {/* ================================================================= */}
+        {/* OVERVIEW METRICS: 5 Key Indicators */}
+        {/* ================================================================= */}
+        <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <div className="bg-white p-5 rounded-xl border border-stone-200/80 shadow-2xs space-y-1">
+            <span className="text-[10px] font-mono text-stone-500 uppercase font-semibold">1. Citizen Voices</span>
+            <div className="text-2xl sm:text-3xl font-mono font-extrabold text-[#1a1c1e]">
+              {regionRawReports.length}
+            </div>
+            <span className="text-[11px] text-stone-500 block">
+              {regionRawReports.length > 0 ? 'Vernacular submissions' : 'No active reports'}
+            </span>
+          </div>
+
+          <div className="bg-white p-5 rounded-xl border border-stone-200/80 shadow-2xs space-y-1">
+            <span className="text-[10px] font-mono text-stone-500 uppercase font-semibold">2. Demand Hotspots</span>
+            <div className="text-2xl sm:text-3xl font-mono font-extrabold text-[#033aaf]">
+              {regionHotspots.length}
+            </div>
+            <span className="text-[11px] text-stone-500 block">
+              Spatial clusters
+            </span>
+          </div>
+
+          <div className="bg-white p-5 rounded-xl border border-stone-200/80 shadow-2xs space-y-1">
+            <span className="text-[10px] font-mono text-stone-500 uppercase font-semibold">3. Avg Development Gap</span>
+            <div className="text-2xl sm:text-3xl font-mono font-extrabold text-[#ba1a1a]">
+              {avgGapScore > 0 ? `${avgGapScore}/100` : 'N/A'}
+            </div>
+            <span className="text-[11px] text-stone-500 block">
+              4-factor synthesized
+            </span>
+          </div>
+
+          <div className="bg-white p-5 rounded-xl border border-stone-200/80 shadow-2xs space-y-1">
+            <span className="text-[10px] font-mono text-stone-500 uppercase font-semibold">4. Priority Signals</span>
+            <div className="text-2xl sm:text-3xl font-mono font-extrabold text-[#E06D28]">
+              {regionPriorities.length}
+            </div>
+            <span className="text-[11px] text-stone-500 block">
+              {criticalSignalCount > 0 ? `${criticalSignalCount} Critical Level` : 'Active assessments'}
+            </span>
+          </div>
+
+          <div className="bg-white p-5 rounded-xl border border-stone-200/80 shadow-2xs space-y-1 col-span-2 sm:col-span-1">
+            <span className="text-[10px] font-mono text-stone-500 uppercase font-semibold">5. Candidate Projects</span>
+            <div className="text-2xl sm:text-3xl font-mono font-extrabold text-[#0F766E]">
+              {regionProjects.length}
+            </div>
+            <span className="text-[11px] text-stone-500 block">
+              Modeled archetypes
+            </span>
+          </div>
+        </section>
+
+        {/* ================================================================= */}
+        {/* LIGHTWEIGHT FILTER BAR */}
+        {/* ================================================================= */}
+        {regionHotspots.length > 0 && (
+          <section className="bg-white p-4 rounded-xl border border-stone-200/80 shadow-2xs flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2 text-xs font-medium text-stone-600">
+              <span className="material-symbols-outlined text-[18px] text-[#033aaf]">filter_alt</span>
+              <span>Filter Regional Intelligence:</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              {/* Domain Filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-stone-500 font-mono text-[11px]">Domain:</span>
+                <select
+                  value={selectedDomainFilter}
+                  onChange={(e) => setSelectedDomainFilter(e.target.value)}
+                  className="bg-stone-50 border border-stone-200 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#033aaf]"
+                >
+                  <option value="ALL">All Domains</option>
+                  <option value="Roads & Mobility">Roads & Mobility</option>
+                  <option value="Water Access">Water Access</option>
+                  <option value="Healthcare Access">Healthcare Access</option>
+                  <option value="Electricity & Power">Electricity & Power</option>
+                  <option value="School Facilities">School Facilities</option>
+                </select>
+              </div>
+
+              {/* Priority Filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-stone-500 font-mono text-[11px]">Priority:</span>
+                <select
+                  value={selectedPriorityFilter}
+                  onChange={(e) => setSelectedPriorityFilter(e.target.value)}
+                  className="bg-stone-50 border border-stone-200 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#033aaf]"
+                >
+                  <option value="ALL">All Signals</option>
+                  <option value="Critical Signal">Critical Signal</option>
+                  <option value="High Signal">High Signal</option>
+                  <option value="Moderate Signal">Moderate Signal</option>
+                </select>
+              </div>
+
+              {/* Gap Filter */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-stone-500 font-mono text-[11px]">Gap:</span>
+                <select
+                  value={selectedGapFilter}
+                  onChange={(e) => setSelectedGapFilter(e.target.value)}
+                  className="bg-stone-50 border border-stone-200 rounded-lg px-2.5 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#033aaf]"
+                >
+                  <option value="ALL">All Gaps</option>
+                  <option value="Very High">Very High (≥75)</option>
+                  <option value="High">High (55–74)</option>
+                  <option value="Moderate">Moderate (35–54)</option>
+                </select>
+              </div>
+
+              {(selectedDomainFilter !== 'ALL' || selectedPriorityFilter !== 'ALL' || selectedGapFilter !== 'ALL') && (
+                <button
+                  onClick={() => {
+                    setSelectedDomainFilter('ALL');
+                    setSelectedPriorityFilter('ALL');
+                    setSelectedGapFilter('ALL');
+                  }}
+                  className="text-[11px] font-mono text-[#ba1a1a] hover:underline cursor-pointer ml-2"
+                >
+                  Reset Filters
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* ================================================================= */}
+        {/* STORY STAGE 1: What are citizens reporting? */}
+        {/* ================================================================= */}
+        <section className="space-y-6">
+          <div className="border-b border-stone-200 pb-3">
+            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold tracking-wider">
+              Step 1 of 6 · Community Signals
+            </span>
+            <h2 className="text-xl sm:text-2xl font-bold text-[#1a1c1e] tracking-tight mt-0.5">
+              What are citizens reporting in {districtMeta.name}?
+            </h2>
+            <p className="text-xs sm:text-sm text-[#444653] mt-1">
+              Distribution of vernacular citizen testimony and localized demand concentrations.
+            </p>
+          </div>
+
+          {/* Domain Distribution & Hotspot Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left: Civic Domain Distribution */}
+            <div className="lg:col-span-4 bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4">
+              <h3 className="text-sm font-bold text-[#1a1c1e]">
+                Civic Domain Distribution
+              </h3>
+              <p className="text-xs text-stone-500">
+                Percentage of verified citizen reports by sector in {districtMeta.name}.
+              </p>
+
+              {domainDistribution.length > 0 ? (
+                <div className="space-y-3 pt-2">
+                  {domainDistribution.map((item) => (
+                    <div key={item.domain} className="space-y-1">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-semibold text-stone-800">{item.domain}</span>
+                        <span className="font-mono text-stone-600">{item.count} reports ({item.pct}%)</span>
+                      </div>
+                      <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
+                        <div
+                          className="bg-[#033aaf] h-2 rounded-full"
+                          style={{ width: `${item.pct}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-8 text-center text-xs text-stone-400 font-mono">
+                  No citizen demand reports logged for this district.
+                </div>
+              )}
+            </div>
+
+            {/* Right: Demand Hotspots List */}
+            <div className="lg:col-span-8 space-y-4">
+              {filteredHotspots.length > 0 ? (
+                filteredHotspots.map((hotspot) => (
+                  <div
+                    key={hotspot.id}
+                    className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4 hover:border-stone-300 transition-colors"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2.5 py-0.5 rounded-md bg-[#033aaf]/10 text-[#033aaf] text-[11px] font-semibold font-mono">
+                            {hotspot.domain}
+                          </span>
+                          <span className="text-xs font-mono text-stone-500">
+                            ID: {hotspot.id}
+                          </span>
+                        </div>
+                        <h4 className="text-base sm:text-lg font-bold text-[#1a1c1e] mt-1.5">
+                          {hotspot.demandTitle}
+                        </h4>
+                      </div>
+
+                      <span className="px-3 py-1 rounded-full bg-stone-100 text-stone-800 text-xs font-mono font-bold border border-stone-200">
+                        {hotspot.reportCount} Reports Aggregated
+                      </span>
+                    </div>
+
+                    <p className="text-xs sm:text-sm text-[#444653] leading-relaxed">
+                      {hotspot.normalizedDemand}
+                    </p>
+
+                    {/* Localities & Key Signals */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                      <span className="text-[11px] font-mono text-stone-500 font-semibold">Localities:</span>
+                      {hotspot.localities.map((loc) => (
+                        <span key={loc} className="px-2 py-0.5 rounded bg-stone-100 text-stone-700 text-[11px] font-mono">
+                          {loc}
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* Severity & Urgency distributions */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-stone-100 text-xs">
+                      <div>
+                        <span className="text-[10px] font-mono text-stone-500 uppercase block mb-1">Severity Breakdown</span>
+                        <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                          <span className="text-red-700 font-bold">Crit: {hotspot.severityDistribution.Critical}</span>
+                          <span>·</span>
+                          <span className="text-orange-700 font-semibold">High: {hotspot.severityDistribution.High}</span>
+                          <span>·</span>
+                          <span className="text-stone-600">Med: {hotspot.severityDistribution.Medium}</span>
+                          <span>·</span>
+                          <span className="text-stone-400">Low: {hotspot.severityDistribution.Low}</span>
+                        </div>
+                      </div>
+
+                      <div>
+                        <span className="text-[10px] font-mono text-stone-500 uppercase block mb-1">Urgency Profile</span>
+                        <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                          <span className="text-red-700 font-bold">Imm: {hotspot.urgencyDistribution.Immediate}</span>
+                          <span>·</span>
+                          <span className="text-amber-700 font-semibold">Seas: {hotspot.urgencyDistribution['Seasonal Risk']}</span>
+                          <span>·</span>
+                          <span className="text-stone-600">Rout: {hotspot.urgencyDistribution.Routine}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="bg-white p-8 rounded-2xl border border-stone-200/80 text-center space-y-2">
+                  <span className="material-symbols-outlined text-3xl text-stone-300">search_off</span>
+                  <h4 className="text-sm font-bold text-stone-700">No Demand Hotspots Found</h4>
+                  <p className="text-xs text-stone-500 max-w-md mx-auto">
+                    No active demand hotspots match the current filter criteria for {districtMeta.name}.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ================================================================= */}
+        {/* STORY STAGE 2: What contextual factors matter? */}
+        {/* ================================================================= */}
+        <section className="space-y-6">
+          <div className="border-b border-stone-200 pb-3">
+            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold tracking-wider">
+              Step 2 of 6 · Development Context
+            </span>
+            <h2 className="text-xl sm:text-2xl font-bold text-[#1a1c1e] tracking-tight mt-0.5">
+              Contextual Infrastructure &amp; Demographic Baselines
+            </h2>
+            <p className="text-xs sm:text-sm text-[#444653] mt-1">
+              Cross-referencing demand against baseline access indicators, population density, and recent capital allocations.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* 1. Infrastructure Access */}
+            <div className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
-                <span className="text-xs uppercase tracking-wider text-[#444653] font-bold">
-                  Development Gap Score
-                </span>
-                <span className="px-2 py-0.5 rounded bg-[#ffdad6] text-[#ba1a1a] font-mono text-[10px] font-bold">
-                  RANGE 0–100
-                </span>
+                <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold">Baseline Access</span>
+                <span className="material-symbols-outlined text-lg text-[#033aaf]">account_tree</span>
               </div>
-              <div className="flex items-baseline gap-2 my-4">
-                <span className="text-5xl sm:text-6xl font-extrabold text-[#1a1c1e] leading-none font-mono">
-                  84
-                </span>
-                <span className="text-2xl font-mono text-[#ba1a1a] font-bold">/ 100</span>
+              <h3 className="text-base font-bold text-[#1a1c1e]">Infrastructure Coverage</h3>
+
+              <div className="space-y-2.5 text-xs">
+                <div>
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-stone-700">Road Accessibility</span>
+                    <span className="font-mono font-bold">{Math.round((infraProfile.indicators.roadAccessibility ?? 0.5) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                    <div className="bg-[#033aaf] h-1.5 rounded-full" style={{ width: `${(infraProfile.indicators.roadAccessibility ?? 0.5) * 100}%` }}></div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-stone-700">Water Access</span>
+                    <span className="font-mono font-bold">{Math.round((infraProfile.indicators.waterAccess ?? 0.5) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                    <div className="bg-[#033aaf] h-1.5 rounded-full" style={{ width: `${(infraProfile.indicators.waterAccess ?? 0.5) * 100}%` }}></div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-stone-700">Healthcare Access</span>
+                    <span className="font-mono font-bold">{Math.round((infraProfile.indicators.healthcareAccess ?? 0.5) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                    <div className="bg-[#033aaf] h-1.5 rounded-full" style={{ width: `${(infraProfile.indicators.healthcareAccess ?? 0.5) * 100}%` }}></div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-stone-700">Electricity Reliability</span>
+                    <span className="font-mono font-bold">{Math.round((infraProfile.indicators.electricityReliability ?? 0.5) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                    <div className="bg-[#033aaf] h-1.5 rounded-full" style={{ width: `${(infraProfile.indicators.electricityReliability ?? 0.5) * 100}%` }}></div>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-stone-700">School Adequacy</span>
+                    <span className="font-mono font-bold">{Math.round((infraProfile.indicators.schoolFacilityAdequacy ?? 0.5) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                    <div className="bg-[#033aaf] h-1.5 rounded-full" style={{ width: `${(infraProfile.indicators.schoolFacilityAdequacy ?? 0.5) * 100}%` }}></div>
+                  </div>
+                </div>
               </div>
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#ffdad6] text-[#ba1a1a] text-xs font-mono font-bold w-fit">
-                <span className="material-symbols-outlined text-[16px]">priority_high</span>
-                CRITICAL GAP LEVEL (Score ≥ 75)
+
+              {infraProfile.coverageNotes.length > 0 && (
+                <div className="pt-2 border-t border-stone-100 text-[11px] text-stone-500 font-mono">
+                  {infraProfile.coverageNotes[0]}
+                </div>
+              )}
+            </div>
+
+            {/* 2. Demographic Exposure */}
+            <div className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono text-[#E06D28] uppercase font-bold">Demographics</span>
+                <span className="material-symbols-outlined text-lg text-[#E06D28]">groups</span>
               </div>
-              <p className="text-xs text-[#444653] mt-4 leading-relaxed">
-                Deterministic composite index synthesized from community demand, infrastructure deficit, demographic vulnerability, and public investment context.
+              <h3 className="text-base font-bold text-[#1a1c1e]">Population Exposure</h3>
+
+              <div className="space-y-3 text-xs">
+                <div className="flex justify-between items-center py-1 border-b border-stone-100">
+                  <span className="text-stone-600">Total Population</span>
+                  <span className="font-mono font-bold">{(demoProfile.population).toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-100">
+                  <span className="text-stone-600">Population Density</span>
+                  <span className="font-mono font-bold">{demoProfile.populationDensity} / km²</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-100">
+                  <span className="text-stone-600">Rural Population Share</span>
+                  <span className="font-mono font-bold">{Math.round((demoProfile.ruralPopulationShare ?? 0.7) * 100)}%</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-stone-100">
+                  <span className="text-stone-600">Vulnerable Segment Share</span>
+                  <span className="font-mono font-bold">{Math.round((demoProfile.vulnerablePopulationShare ?? 0.3) * 100)}%</span>
+                </div>
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-stone-600">Seasonal Vulnerability Pressure</span>
+                  <span className="font-mono font-bold">{Math.round((demoProfile.pressureIndicators.seasonalPressure ?? 0.5) * 100)}%</span>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-stone-100 text-[11px] text-stone-500 font-mono">
+                Service Demand Strain: {Math.round((demoProfile.pressureIndicators.serviceDemandPressure ?? 0.5) * 100)}%
+              </div>
+            </div>
+
+            {/* 3. Recent Capital Investment */}
+            <div className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono text-[#0F766E] uppercase font-bold">Capital Allocation</span>
+                <span className="material-symbols-outlined text-lg text-[#0F766E]">payments</span>
+              </div>
+              <h3 className="text-base font-bold text-[#1a1c1e]">Recent Public Investment</h3>
+
+              <div className="space-y-3 text-xs">
+                <div>
+                  <div className="flex justify-between mb-0.5">
+                    <span className="text-stone-700">Recent Investment Index</span>
+                    <span className="font-mono font-bold">{Math.round((investProfile.recentInvestmentIndex ?? 0.5) * 100)}%</span>
+                  </div>
+                  <div className="w-full bg-stone-100 h-2 rounded-full overflow-hidden">
+                    <div className="bg-[#0F766E] h-2 rounded-full" style={{ width: `${(investProfile.recentInvestmentIndex ?? 0.5) * 100}%` }}></div>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-2">
+                  <span className="text-[10px] font-mono text-stone-500 uppercase block">Domain Investment Coverage</span>
+                  {investProfile.investmentByDomain.slice(0, 4).map((inv) => (
+                    <div key={inv.domain} className="flex justify-between items-center text-[11px] py-0.5">
+                      <span className="text-stone-600">{inv.domain}</span>
+                      <span className="font-mono font-bold">{Math.round(inv.investmentIndex * 100)}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {investProfile.coverageNotes.length > 0 && (
+                <div className="pt-2 border-t border-stone-100 text-[11px] text-stone-500 font-mono">
+                  {investProfile.coverageNotes[0]}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* ================================================================= */}
+        {/* STORY STAGE 3: Where are the development gaps? */}
+        {/* ================================================================= */}
+        <section className="space-y-6">
+          <div className="border-b border-stone-200 pb-3">
+            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold tracking-wider">
+              Step 3 of 6 · Development Gap Analysis
+            </span>
+            <h2 className="text-xl sm:text-2xl font-bold text-[#1a1c1e] tracking-tight mt-0.5">
+              Development Gap Indices for {districtMeta.name}
+            </h2>
+            <p className="text-xs sm:text-sm text-[#444653] mt-1">
+              Deterministic 4-factor scoring: 0.40 × Demand + 0.30 × Infra Need + 0.20 × Demo Pressure + 0.10 × Investment Gap.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {filteredGaps.length > 0 ? (
+              filteredGaps.map((gap) => (
+                <div
+                  key={gap.id}
+                  className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className="text-[10px] font-mono uppercase text-[#033aaf] font-bold">
+                        {gap.civicDomain}
+                      </span>
+                      <h4 className="text-base font-bold text-[#1a1c1e] mt-0.5">
+                        {gap.demandTitle}
+                      </h4>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-2xl sm:text-3xl font-mono font-extrabold text-[#ba1a1a] block">
+                        {gap.developmentGapScore}
+                        <span className="text-xs font-normal text-stone-400">/100</span>
+                      </span>
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                          gap.gapLevel === 'Very High'
+                            ? 'bg-red-100 text-red-800'
+                            : gap.gapLevel === 'High'
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {gap.gapLevel} Gap
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 4 Factor Breakdown Bars */}
+                  <div className="space-y-2 pt-2 border-t border-stone-100 text-xs">
+                    <div>
+                      <div className="flex justify-between mb-0.5">
+                        <span className="text-stone-600">Demand Signal (40%)</span>
+                        <span className="font-mono font-semibold">{Math.round(gap.demandSignal * 100)}%</span>
+                      </div>
+                      <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                        <div className="bg-[#033aaf] h-1.5 rounded-full" style={{ width: `${gap.demandSignal * 100}%` }}></div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between mb-0.5">
+                        <span className="text-stone-600">Infrastructure Need (30%)</span>
+                        <span className="font-mono font-semibold">{Math.round(gap.infrastructureNeed * 100)}%</span>
+                      </div>
+                      <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                        <div className="bg-red-600 h-1.5 rounded-full" style={{ width: `${gap.infrastructureNeed * 100}%` }}></div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between mb-0.5">
+                        <span className="text-stone-600">Demographic Pressure (20%)</span>
+                        <span className="font-mono font-semibold">{Math.round(gap.demographicPressure * 100)}%</span>
+                      </div>
+                      <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                        <div className="bg-amber-600 h-1.5 rounded-full" style={{ width: `${gap.demographicPressure * 100}%` }}></div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between mb-0.5">
+                        <span className="text-stone-600">Investment Gap (10%)</span>
+                        <span className="font-mono font-semibold">{Math.round(gap.investmentGap * 100)}%</span>
+                      </div>
+                      <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
+                        <div className="bg-teal-700 h-1.5 rounded-full" style={{ width: `${gap.investmentGap * 100}%` }}></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Formula String */}
+                  <div className="p-2.5 rounded-lg bg-stone-50 border border-stone-200 text-[11px] font-mono text-stone-700">
+                    [0.40 × {gap.demandSignal}] + [0.30 × {gap.infrastructureNeed}] + [0.20 × {gap.demographicPressure}] + [0.10 × {gap.investmentGap}] = {gap.developmentGapScore}/100
+                  </div>
+
+                  {/* Explanation */}
+                  <p className="text-xs text-stone-600 leading-relaxed italic">
+                    &ldquo;{gap.explanation}&rdquo;
+                  </p>
+                </div>
+              ))
+            ) : (
+              <div className="col-span-2 bg-white p-8 rounded-2xl border border-stone-200/80 text-center space-y-2">
+                <span className="material-symbols-outlined text-3xl text-stone-300">dataset</span>
+                <h4 className="text-sm font-bold text-stone-700">No Development Gaps Indexed</h4>
+                <p className="text-xs text-stone-500 max-w-md mx-auto">
+                  No development gap records match the active filter criteria for this region.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ================================================================= */}
+        {/* STORY STAGE 4: Which signals stand out? */}
+        {/* ================================================================= */}
+        <section className="space-y-6">
+          <div className="border-b border-stone-200 pb-3">
+            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold tracking-wider">
+              Step 4 of 6 · Priority Intelligence
+            </span>
+            <h2 className="text-xl sm:text-2xl font-bold text-[#1a1c1e] tracking-tight mt-0.5">
+              Priority Signals &amp; Explainable Ranking
+            </h2>
+            <p className="text-xs sm:text-sm text-[#444653] mt-1">
+              5-factor analytical priority index derived for deliberative planning support.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {filteredPriorities.length > 0 ? (
+              filteredPriorities.map((p) => (
+                <div
+                  key={p.id}
+                  className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <span className="text-[10px] font-mono uppercase text-[#033aaf] font-bold">
+                        {p.civicDomain}
+                      </span>
+                      <h4 className="text-base font-bold text-[#1a1c1e] mt-0.5">
+                        {p.demandTitle}
+                      </h4>
+                    </div>
+
+                    <div className="text-right">
+                      <span className="text-2xl sm:text-3xl font-mono font-extrabold text-[#033aaf] block">
+                        {p.priorityScore}
+                        <span className="text-xs font-normal text-stone-400">/100</span>
+                      </span>
+                      <span
+                        className={`inline-block px-2.5 py-0.5 rounded text-[10px] font-mono font-bold ${
+                          p.priorityBand === 'Critical Signal'
+                            ? 'bg-red-100 text-red-800'
+                            : p.priorityBand === 'High Signal'
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {p.priorityBand}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 5 Priority Factor breakdown */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px] font-mono pt-2 border-t border-stone-100">
+                    <div className="bg-stone-50 p-2 rounded border border-stone-200/60">
+                      <span className="text-stone-500 block text-[10px]">Demand (30%)</span>
+                      <span className="font-bold text-stone-800">{Math.round(p.factors.demandIntensity * 100)}%</span>
+                    </div>
+                    <div className="bg-stone-50 p-2 rounded border border-stone-200/60">
+                      <span className="text-stone-500 block text-[10px]">Gap (30%)</span>
+                      <span className="font-bold text-stone-800">{Math.round(p.factors.developmentGap * 100)}%</span>
+                    </div>
+                    <div className="bg-stone-50 p-2 rounded border border-stone-200/60">
+                      <span className="text-stone-500 block text-[10px]">Urgency (15%)</span>
+                      <span className="font-bold text-stone-800">{Math.round(p.factors.urgency * 100)}%</span>
+                    </div>
+                    <div className="bg-stone-50 p-2 rounded border border-stone-200/60">
+                      <span className="text-stone-500 block text-[10px]">Geo Conc (15%)</span>
+                      <span className="font-bold text-stone-800">{Math.round(p.factors.geographicConcentration * 100)}%</span>
+                    </div>
+                    <div className="bg-stone-50 p-2 rounded border border-stone-200/60 col-span-2 sm:col-span-1">
+                      <span className="text-stone-500 block text-[10px]">Pressure (10%)</span>
+                      <span className="font-bold text-stone-800">{Math.round(p.factors.servicePressure * 100)}%</span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-[#444653] leading-relaxed">
+                    {p.explanation}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <div className="col-span-2 bg-white p-8 rounded-2xl border border-stone-200/80 text-center space-y-2">
+                <span className="material-symbols-outlined text-3xl text-stone-300">priority_high</span>
+                <h4 className="text-sm font-bold text-stone-700">No Priority Signals</h4>
+                <p className="text-xs text-stone-500 max-w-md mx-auto">
+                  No priority signals match the selected filter parameters.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ================================================================= */}
+        {/* STORY STAGE 5: What candidate pathways emerge? */}
+        {/* ================================================================= */}
+        <section className="space-y-6">
+          <div className="border-b border-stone-200 pb-3">
+            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold tracking-wider">
+              Step 5 of 6 · Candidate Development Projects
+            </span>
+            <h2 className="text-xl sm:text-2xl font-bold text-[#1a1c1e] tracking-tight mt-0.5">
+              Candidate Intervention Archetypes
+            </h2>
+            <p className="text-xs sm:text-sm text-[#444653] mt-1">
+              Demonstration intervention pathways mapped from priority signals. (These are candidate project options for demonstration, not government procurement decisions).
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {filteredProjects.length > 0 ? (
+              filteredProjects.map((proj) => (
+                <div
+                  key={proj.id}
+                  className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-xs space-y-4 flex flex-col justify-between"
+                >
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full bg-teal-50 text-teal-800 text-[11px] font-mono font-bold border border-teal-200">
+                        {proj.projectType}
+                      </span>
+                      <span className="text-xs font-mono text-stone-400">
+                        ID: {proj.id}
+                      </span>
+                    </div>
+
+                    <h4 className="text-lg font-bold text-[#1a1c1e]">
+                      {proj.projectTitle}
+                    </h4>
+
+                    <p className="text-xs sm:text-sm text-[#444653] leading-relaxed">
+                      {proj.description}
+                    </p>
+
+                    <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/80 space-y-1">
+                      <span className="text-[10px] font-mono text-stone-500 uppercase font-bold">Target Need:</span>
+                      <p className="text-xs text-stone-800">{proj.targetNeed}</p>
+                    </div>
+
+                    {/* Feasibility & Checklist */}
+                    <div className="space-y-1.5 pt-1">
+                      <span className="text-[10px] font-mono text-stone-500 uppercase font-bold">
+                        Implementation Considerations:
+                      </span>
+                      <ul className="space-y-1">
+                        {proj.implementationConsiderations.map((c, idx) => (
+                          <li key={idx} className="flex items-start gap-1.5 text-xs text-stone-600">
+                            <span className="material-symbols-outlined text-[14px] text-teal-600 shrink-0 mt-0.5">check_circle</span>
+                            <span>{c}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-stone-100 flex items-center justify-between gap-3">
+                    <button
+                      onClick={() => {
+                        setSelectedTraceProject(proj.id);
+                        const el = document.getElementById('traceability-section');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      className="text-xs font-mono text-[#033aaf] hover:underline cursor-pointer flex items-center gap-1"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">timeline</span>
+                      <span>Inspect Lineage</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setActiveProjectId(proj.id);
+                        const el = document.getElementById('simulation-section');
+                        if (el) el.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      className="px-4 py-2 rounded-xl bg-[#111315] hover:bg-stone-800 text-white text-xs font-semibold transition-colors shadow-2xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span className="material-symbols-outlined text-[15px]">tune</span>
+                      <span>Simulate Impact ↓</span>
+                    </button>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="col-span-2 bg-white p-8 rounded-2xl border border-stone-200/80 text-center space-y-2">
+                <span className="material-symbols-outlined text-3xl text-stone-300">construction</span>
+                <h4 className="text-sm font-bold text-stone-700">No Candidate Projects</h4>
+                <p className="text-xs text-stone-500 max-w-md mx-auto">
+                  No candidate project archetypes available for the selected filters.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* ================================================================= */}
+        {/* STORY STAGE 6: End-to-End Traceability & Lineage */}
+        {/* ================================================================= */}
+        <section id="traceability-section" className="bg-white p-6 sm:p-8 rounded-2xl border border-stone-200/80 shadow-xs space-y-6">
+          <div className="border-b border-stone-200 pb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold tracking-wider">
+                Explainability &amp; Lineage Audit
+              </span>
+              <h2 className="text-xl sm:text-2xl font-bold text-[#1a1c1e] tracking-tight mt-0.5">
+                End-to-End Analytical Traceability
+              </h2>
+              <p className="text-xs sm:text-sm text-[#444653] mt-1">
+                Verifiable chain of custody linking lived citizen testimony directly to simulated development interventions.
               </p>
             </div>
-            <div className="mt-6 pt-2 bg-[#f3f3f6] rounded p-2 border border-stone-200">
-              <span className="text-[10px] font-mono text-[#747685] block text-center">
-                Prototype methodology · Not official government statistics
-              </span>
-            </div>
+
+            {regionProjects.length > 0 && (
+              <select
+                value={selectedTraceProject || regionProjects[0]?.id}
+                onChange={(e) => setSelectedTraceProject(e.target.value)}
+                className="bg-stone-50 border border-stone-200 rounded-lg px-3 py-1.5 text-xs font-mono font-medium focus:outline-none focus:ring-1 focus:ring-[#033aaf]"
+              >
+                {regionProjects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    Lineage for: {p.projectTitle}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
-          {/* Right: Factor Decomposition Bars */}
-          <div className="lg:col-span-8 bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80 flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex flex-col">
-                <h2 className="text-lg font-bold text-[#1a1c1e]">Factor Decomposition</h2>
-                <span className="text-xs text-[#444653]">Weight allocation applied to localized signal normalization</span>
-              </div>
-              <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold bg-[#dce1ff] px-2 py-0.5 rounded">
-                Configurable Weights
-              </span>
-            </div>
-
-            <div className="space-y-4 text-xs">
-              {/* Factor 1 */}
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-[#1a1c1e]">
-                    1. Citizen Demand <span className="text-[#444653] font-normal">(Weight: 30%)</span>
-                  </span>
-                  <span className="font-mono font-bold text-[#1a1c1e]">91 / 100</span>
-                </div>
-                <div className="w-full bg-[#e8e8ea] h-2.5 rounded-full overflow-hidden">
-                  <div className="bg-[#033aaf] h-2.5 rounded-full" style={{ width: '91%' }}></div>
-                </div>
-                <span className="text-[11px] text-[#444653] block mt-0.5">
-                  High concentration of verified voice submissions across 17 gram panchayats.
+          {/* Visual Step Pipeline Flow */}
+          {regionProjects.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Step 1 */}
+              <div className="p-4 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
+                <span className="text-[10px] font-mono text-[#033aaf] font-bold block">1. CITIZEN DEMAND</span>
+                <span className="text-xs font-bold text-stone-900 block truncate">
+                  {regionRawReports.length} Reports Logged
                 </span>
-              </div>
-
-              {/* Factor 2 */}
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-[#1a1c1e]">
-                    2. Infrastructure Deficit <span className="text-[#444653] font-normal">(Weight: 25%)</span>
-                  </span>
-                  <span className="font-mono font-bold text-[#1a1c1e]">84 / 100</span>
-                </div>
-                <div className="w-full bg-[#e8e8ea] h-2.5 rounded-full overflow-hidden">
-                  <div className="bg-[#033aaf] h-2.5 rounded-full" style={{ width: '84%' }}></div>
-                </div>
-                <span className="text-[11px] text-[#444653] block mt-0.5">
-                  PMGSY all-weather road coverage 42% below district baseline.
-                </span>
-              </div>
-
-              {/* Factor 3 */}
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-[#1a1c1e]">
-                    3. Population Exposure <span className="text-[#444653] font-normal">(Weight: 20%)</span>
-                  </span>
-                  <span className="font-mono font-bold text-[#1a1c1e]">78 / 100</span>
-                </div>
-                <div className="w-full bg-[#e8e8ea] h-2.5 rounded-full overflow-hidden">
-                  <div className="bg-[#2e54c7] h-2.5 rounded-full" style={{ width: '78%' }}></div>
-                </div>
-                <span className="text-[11px] text-[#444653] block mt-0.5">
-                  72,400 rural residents situated inside direct catchment severance area.
-                </span>
-              </div>
-
-              {/* Factor 4 */}
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-[#1a1c1e]">
-                    4. Seasonal Urgency <span className="text-[#444653] font-normal">(Weight: 15%)</span>
-                  </span>
-                  <span className="font-mono font-bold text-[#1a1c1e]">82 / 100</span>
-                </div>
-                <div className="w-full bg-[#e8e8ea] h-2.5 rounded-full overflow-hidden">
-                  <div className="bg-[#9e4200] h-2.5 rounded-full" style={{ width: '82%' }}></div>
-                </div>
-                <span className="text-[11px] text-[#444653] block mt-0.5">
-                  Monsoon inundation cuts emergency maternal &amp; health clinic transit.
-                </span>
-              </div>
-
-              {/* Factor 5 */}
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-[#1a1c1e]">
-                    5. Demographic Vulnerability <span className="text-[#444653] font-normal">(Weight: 10%)</span>
-                  </span>
-                  <span className="font-mono font-bold text-[#1a1c1e]">64 / 100</span>
-                </div>
-                <div className="w-full bg-[#e8e8ea] h-2.5 rounded-full overflow-hidden">
-                  <div className="bg-[#fe843e] h-2.5 rounded-full" style={{ width: '64%' }}></div>
-                </div>
-                <span className="text-[11px] text-[#444653] block mt-0.5">
-                  Smallholder agricultural transport reliance and lack of secondary feeder spurs.
-                </span>
-              </div>
-
-              {/* Factor 6 (Inverse Offset) */}
-              <div className="bg-[#004f49]/5 p-3 rounded-lg border border-[#004f49]/15">
-                <div className="flex justify-between items-center mb-1">
-                  <span className="font-semibold text-[#004f49]">
-                    6. Investment Coverage <span className="font-normal">(Inverse Offset Weight: 20%)</span>
-                  </span>
-                  <span className="font-mono font-bold text-[#004f49]">31 / 100</span>
-                </div>
-                <div className="w-full bg-[#e8e8ea] h-2.5 rounded-full overflow-hidden">
-                  <div className="bg-[#004f49] h-2.5 rounded-full" style={{ width: '31%' }}></div>
-                </div>
-                <span className="text-[11px] text-[#444653] block mt-0.5">
-                  Higher investment coverage offsets the gap score; current coverage reveals significant funding divergence.
-                </span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Section 3: Formula Transparency Pipeline */}
-        <section className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80">
-          <div className="flex flex-col gap-1 mb-4">
-            <div className="flex items-center gap-1.5 text-[#033aaf] text-[10px] font-mono uppercase tracking-wider font-bold">
-              <span className="material-symbols-outlined text-[16px]">functions</span>
-              <span>DETERMINISTIC FORMULATION</span>
-            </div>
-            <h2 className="text-lg font-bold text-[#1a1c1e]">How the signal is calculated</h2>
-          </div>
-
-          <div className="bg-[#f3f3f6] rounded-lg p-4 font-mono text-xs overflow-x-auto text-[#1a1c1e] leading-loose border border-stone-200">
-            <div className="flex flex-wrap items-center gap-1.5 min-w-[720px]">
-              <span className="px-2 py-1 rounded bg-white text-[#033aaf] border border-stone-200">[Demand (91 × 0.30)]</span>
-              <span>+</span>
-              <span className="px-2 py-1 rounded bg-white text-[#033aaf] border border-stone-200">[Infra Deficit (84 × 0.25)]</span>
-              <span>+</span>
-              <span className="px-2 py-1 rounded bg-white text-[#2e54c7] border border-stone-200">[Exposure (78 × 0.20)]</span>
-              <span>+</span>
-              <span className="px-2 py-1 rounded bg-white text-[#9e4200] border border-stone-200">[Urgency (82 × 0.15)]</span>
-              <span>+</span>
-              <span className="px-2 py-1 rounded bg-white text-[#fe843e] border border-stone-200">[Vulnerability (64 × 0.10)]</span>
-              <span>−</span>
-              <span className="px-2 py-1 rounded bg-[#9cf2e8] text-[#00201d] font-bold">[Investment Coverage (31 × 0.20)]</span>
-              <span>=</span>
-              <span className="px-2.5 py-1 rounded bg-[#ba1a1a] text-white font-bold">
-                Development Gap 84 (High)
-              </span>
-            </div>
-          </div>
-          <p className="text-xs text-[#444653] mt-2">
-            Prototype weights are fully transparent, configurable, and intended for evidence-based human deliberation — not automated spending algorithms.
-          </p>
-        </section>
-
-        {/* Section 4: Demand Profile & Spatial Triangulation */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left: What communities are saying */}
-          <div className="lg:col-span-6 bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold">Citizen Signal</span>
-                  <h2 className="text-lg font-bold text-[#1a1c1e]">What communities are saying</h2>
-                </div>
-                <span className="px-2.5 py-0.5 rounded-full bg-[#ffdbcb] text-[#341100] text-[11px] font-mono font-bold">
-                  1,284 Requests
-                </span>
-              </div>
-              <div className="flex items-center gap-4 text-[#444653] text-xs font-mono mb-4 pb-2 border-b border-stone-100">
-                <span>Bengali: <strong>68%</strong></span>
-                <span>Hindi: <strong>22%</strong></span>
-                <span>English: <strong>10%</strong></span>
-              </div>
-
-              {/* Trend Chart (Monsoon Surge SVG) */}
-              <div className="mb-4">
-                <span className="text-[10px] font-mono text-[#444653] uppercase block mb-1">
-                  Citizen Requests Over 12-Month Cycle
-                </span>
-                <div className="bg-[#f3f3f6] p-3 rounded-lg border border-stone-200">
-                  <svg className="w-full h-24 stroke-[#033aaf] fill-none" preserveAspectRatio="none" viewBox="0 0 500 120">
-                    <line stroke="#E5E5E2" strokeDasharray="2 2" strokeWidth="1" x1="0" x2="500" y1="30" y2="30"></line>
-                    <line stroke="#E5E5E2" strokeDasharray="2 2" strokeWidth="1" x1="0" x2="500" y1="70" y2="70"></line>
-                    <line stroke="#E5E5E2" strokeWidth="1" x1="0" x2="500" y1="110" y2="110"></line>
-
-                    {/* Monsoon Surge Highlight */}
-                    <rect fill="rgba(224, 109, 40, 0.08)" height="120" stroke="none" width="160" x="200" y="0"></rect>
-
-                    {/* Trend Line */}
-                    <path
-                      d="M 0,105 Q 80,100 140,95 T 210,65 T 260,18 T 310,24 T 360,70 T 430,90 T 500,98"
-                      fill="none"
-                      stroke="#033aaf"
-                      strokeWidth="2.5"
-                    ></path>
-                    <circle cx="260" cy="18" fill="#9e4200" r="4"></circle>
-                    <circle cx="310" cy="24" fill="#9e4200" r="4"></circle>
-                  </svg>
-                  <div className="flex justify-between text-[10px] font-mono text-[#747685] mt-1 px-1">
-                    <span>JAN</span>
-                    <span>APR</span>
-                    <span className="text-[#9e4200] font-bold">JUL (MONSOON PEAK)</span>
-                    <span className="text-[#9e4200] font-bold">AUG</span>
-                    <span>OCT</span>
-                    <span>DEC</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Issue Tag Chips */}
-              <div className="flex flex-wrap gap-1.5 mb-4 text-xs">
-                <span className="px-2.5 py-1 rounded-full bg-[#f3f3f6] text-[#1a1c1e] border border-stone-200">
-                  Broken village culverts (41%)
-                </span>
-                <span className="px-2.5 py-1 rounded-full bg-[#f3f3f6] text-[#1a1c1e] border border-stone-200">
-                  Monsoon waterlogging (29%)
-                </span>
-                <span className="px-2.5 py-1 rounded-full bg-[#f3f3f6] text-[#1a1c1e] border border-stone-200">
-                  Sub-centre access cut off (18%)
-                </span>
-                <span className="px-2.5 py-1 rounded-full bg-[#f3f3f6] text-[#1a1c1e] border border-stone-200">
-                  Agricultural market transit severed (12%)
-                </span>
-              </div>
-
-              {/* Verbatim Quotes */}
-              <div className="p-3 rounded-lg bg-[#f3f3f6] text-[#1a1c1e] border border-stone-200">
-                <p className="text-xs italic">
-                  "বর্ষার সময় আমাদের পঞ্চায়েতের রাস্তা পুরো জলের তলায় চলে যায়, কোনো অ্যাম্বুলেন্স আসতে পারে না।"
+                <p className="text-[11px] text-stone-500 leading-snug">
+                  Multilingual audio/text intake normalized via Gemini civic ontology.
                 </p>
-                <p className="text-xs text-[#444653] mt-1">
-                  <span className="font-mono text-[#033aaf] font-bold">TRANSLATION (VERIFIED):</span> "During monsoon our GP road is fully submerged, no ambulance can enter."
-                </p>
-              </div>
-            </div>
-            <div className="mt-4 text-right">
-              <span className="text-[10px] font-mono text-[#747685] uppercase">
-                Aggregated via Baat2Badlav Citizen Line
-              </span>
-            </div>
-          </div>
-
-          {/* Right: Spatial Triangulation Map */}
-          <div className="lg:col-span-6 bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold">Spatial Triangulation</span>
-                  <h2 className="text-lg font-bold text-[#1a1c1e]">Where the signal is concentrated</h2>
-                </div>
-                <span className="px-2.5 py-0.5 rounded-full bg-[#f3f3f6] text-[#444653] text-[11px] font-mono border border-stone-200">
-                  17 GP Contiguity
+                <span className="inline-block font-mono text-[10px] text-stone-400">
+                  Ref: {regionRawReports[0]?.submission.id || 'N/A'}
                 </span>
               </div>
 
-              {/* Cluster Map Vector */}
-              <div className="bg-[#f3f3f6] rounded-xl p-4 relative overflow-hidden flex items-center justify-center border border-stone-200">
-                <svg className="w-full h-56 max-w-md" viewBox="0 0 400 240">
-                  {/* Cluster Boundary */}
-                  <path
-                    d="M 60,60 Q 150,20 280,50 T 360,130 T 290,210 T 110,190 T 50,110 Z"
-                    fill="rgba(3, 58, 175, 0.04)"
-                    stroke="#c4c5d6"
-                    strokeDasharray="4 4"
-                    strokeWidth="1.5"
-                  ></path>
-                  {/* Inundated Water Corridor */}
-                  <path
-                    d="M 40,40 Q 180,90 240,160 T 380,210"
-                    fill="none"
-                    opacity="0.6"
-                    stroke="#90e6dc"
-                    strokeLinecap="round"
-                    strokeWidth="12"
-                  ></path>
-                  {/* Road Linkages (Broken) */}
-                  <line stroke="#fe843e" strokeDasharray="4 2" strokeWidth="2.5" x1="90" x2="160" y1="80" y2="105"></line>
-                  <line stroke="#ba1a1a" strokeWidth="3" x1="160" x2="225" y1="105" y2="120"></line>
-                  <line stroke="#fe843e" strokeDasharray="4 2" strokeWidth="2.5" x1="225" x2="295" y1="120" y2="90"></line>
-                  <line stroke="#ba1a1a" strokeWidth="3" x1="225" x2="250" y1="120" y2="170"></line>
-                  <line stroke="#033aaf" strokeWidth="2" x1="160" x2="140" y1="105" y2="165"></line>
-
-                  {/* GP Center Nodes */}
-                  <g>
-                    <circle cx="160" cy="105" fill="#033aaf" r="7"></circle>
-                    <text className="font-mono text-[9px] fill-[#1a1c1e] font-bold" textAnchor="middle" x="160" y="95">
-                      Chapra
-                    </text>
-                  </g>
-                  <g>
-                    <circle cx="225" cy="120" fill="#ba1a1a" r="10"></circle>
-                    <circle className="animate-ping" cx="225" cy="120" fill="none" opacity="0.4" r="18" stroke="#ba1a1a" strokeWidth="1"></circle>
-                    <text className="font-mono text-[9px] fill-[#ba1a1a] font-bold" textAnchor="middle" x="225" y="145">
-                      Tehatta-II
-                    </text>
-                  </g>
-                  <g>
-                    <circle cx="295" cy="90" fill="#033aaf" r="6"></circle>
-                    <text className="font-mono text-[9px] fill-[#1a1c1e] font-bold" textAnchor="middle" x="295" y="80">
-                      Hanskhali
-                    </text>
-                  </g>
-                  <g>
-                    <circle cx="140" cy="165" fill="#033aaf" r="6"></circle>
-                    <text className="font-mono text-[9px] fill-[#1a1c1e] font-bold" textAnchor="middle" x="140" y="180">
-                      Krishnanagar-II
-                    </text>
-                  </g>
-                  <g>
-                    <circle cx="250" cy="170" fill="#9e4200" r="6"></circle>
-                    <text className="font-mono text-[9px] fill-[#9e4200] font-bold" textAnchor="middle" x="250" y="190">
-                      Betai Spur
-                    </text>
-                  </g>
-                </svg>
-              </div>
-
-              <div className="mt-4 p-3 bg-[#f3f3f6] rounded-lg border border-stone-200">
-                <p className="text-xs text-[#1a1c1e]">
-                  <strong className="text-[#033aaf]">Geographic clustering verifies contiguous physical isolation</strong>{' '}
-                  rather than isolated localized grievances. The 17 affected gram panchayats share the primary drainage basin of the Jalangi tributary.
+              {/* Step 2 */}
+              <div className="p-4 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
+                <span className="text-[10px] font-mono text-[#033aaf] font-bold block">2. DEMAND HOTSPOT</span>
+                <span className="text-xs font-bold text-stone-900 block truncate">
+                  {regionHotspots[0]?.demandTitle || 'Hotspot Derived'}
+                </span>
+                <p className="text-[11px] text-stone-500 leading-snug">
+                  Spatial concentration across {districtMeta.name} habitations.
                 </p>
-              </div>
-            </div>
-            <div className="mt-4 flex justify-between items-center text-[#747685] text-[10px] font-mono">
-              <span>Projection: WGS84 / UTM 45N</span>
-              <span>Source: Survey of India + PMGSY GIS</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Section 5: Multimodal Synthesis (Context Layers) */}
-        <section className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80">
-          <div className="flex flex-col gap-1 mb-4">
-            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold">Multimodal Synthesis</span>
-            <h2 className="text-lg font-bold text-[#1a1c1e]">The signal becomes meaningful in context.</h2>
-            <p className="text-xs text-[#444653]">
-              Isolated citizen voices can be dismissed; triangulated with geospatial physical baselines and municipal accounts, they form institutional proof.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 items-center">
-            {/* Layer 1 */}
-            <div className="bg-[#f3f3f6] p-4 rounded-xl flex flex-col justify-between h-40 border border-stone-200">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono text-[#033aaf] font-bold">01 LAYER</span>
-                <span className="text-xs font-mono font-bold text-[#033aaf]">91 / 100</span>
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-[#1a1c1e]">Citizen Demand</h3>
-                <p className="text-xs text-[#444653] mt-1">1,284 verified requests across 17 contiguous GPs.</p>
-              </div>
-            </div>
-
-            {/* Layer 2 */}
-            <div className="bg-[#f3f3f6] p-4 rounded-xl flex flex-col justify-between h-40 border border-stone-200">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono text-[#033aaf] font-bold">02 LAYER</span>
-                <span className="text-xs font-mono font-bold text-[#ba1a1a]">28 / 100</span>
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-[#1a1c1e]">Physical Infra</h3>
-                <p className="text-xs text-[#444653] mt-1">PMGSY all-weather road index 42% below baseline.</p>
-              </div>
-            </div>
-
-            {/* Layer 3 */}
-            <div className="bg-[#f3f3f6] p-4 rounded-xl flex flex-col justify-between h-40 border border-stone-200">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono text-[#033aaf] font-bold">03 LAYER</span>
-                <span className="text-xs font-mono font-bold text-[#9e4200]">78 / 100</span>
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-[#1a1c1e]">Population Exposure</h3>
-                <p className="text-xs text-[#444653] mt-1">72,400 residents in direct monsoon severance catchment.</p>
-              </div>
-            </div>
-
-            {/* Layer 4 */}
-            <div className="bg-[#f3f3f6] p-4 rounded-xl flex flex-col justify-between h-40 border border-stone-200">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono text-[#004f49] font-bold">04 LAYER</span>
-                <span className="text-xs font-mono font-bold text-[#004f49]">31 / 100</span>
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-[#1a1c1e]">Public Investment</h3>
-                <p className="text-xs text-[#444653] mt-1">Active tenders show zero planned culvert upgrades.</p>
-              </div>
-            </div>
-
-            {/* Result Node */}
-            <div className="bg-[#033aaf] p-4 rounded-xl flex flex-col justify-between h-40 text-white shadow-md">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono text-[#b6c4ff] uppercase tracking-wider font-bold">RESULT NODE</span>
-                <span className="material-symbols-outlined text-[20px]">hub</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-mono uppercase tracking-wider block text-[#b6c4ff]">DEVELOPMENT GAP</span>
-                <span className="text-4xl font-extrabold font-mono leading-none">84</span>
-                <span className="text-xs font-bold block mt-1 text-white">HIGH CONFIDENCE</span>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* Section 6: Gemini 1.5 Pro Explanation */}
-        <section className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border-l-4 border-[#033aaf] border-stone-200/80">
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[#033aaf] text-[20px]">smart_toy</span>
-                <span className="text-base font-bold text-[#1a1c1e]">Gemini 1.5 Pro · Evidence-Based Interpretation</span>
-              </div>
-              <span className="px-2.5 py-0.5 rounded bg-[#f3f3f6] text-[#444653] text-[10px] font-mono font-bold">
-                AI EXPLANATION (Generated insight, not deterministic score)
-              </span>
-            </div>
-            <p className="text-sm sm:text-base text-[#1a1c1e] leading-relaxed">
-              "Citizen demand is acutely concentrated across 17 contiguous Gram Panchayats around seasonal road washouts. When triangulated with ground infrastructure data, PMGSY all-weather connectivity is 42% below district baselines. With 72,400 residents exposed and minimal active capital outlays, this cluster represents a high-confidence structural development gap requiring human policy deliberation."
-            </p>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-[#004f49] text-xs font-mono font-semibold">
-              <span>✓ Citizen demand validated</span>
-              <span>✓ GIS infrastructure baseline matched</span>
-              <span>✓ Census catchment intersected</span>
-              <span>✓ State treasury register cross-referenced</span>
-              <span>✓ Deterministic score audited</span>
-            </div>
-            <div className="pt-1">
-              <span className="text-[11px] font-mono text-[#747685]">
-                Note: AI explains the calculated evidence; it does not determine scores or allocate public funds.
-              </span>
-            </div>
-          </div>
-        </section>
-
-        {/* Section 7: Candidate Interventions */}
-        <section className="flex flex-col gap-4">
-          <div>
-            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold">Policy Pathways</span>
-            <h2 className="text-2xl font-bold text-[#1a1c1e]">What could address the gap?</h2>
-            <p className="text-xs sm:text-sm text-[#444653]">
-              Explore illustrative interventions and compare their modeled outcomes. (Neutral scenario options, not automated endorsements).
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {Object.values(NADIA_INTERVENTIONS).map((opt) => {
-              const isSelected = selectedScenarioId === opt.id;
-              return (
-                <div
-                  key={opt.id}
-                  onClick={() => setSelectedScenarioId(opt.id)}
-                  className={`cursor-pointer bg-white rounded-xl p-6 shadow-sm transition-all flex flex-col justify-between ${
-                    isSelected
-                      ? 'border-2 border-[#033aaf] shadow-md ring-2 ring-[#033aaf]/10'
-                      : 'border border-stone-200 hover:border-[#033aaf]/40'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                          isSelected ? 'bg-[#dce1ff] text-[#033aaf]' : 'bg-[#f3f3f6] text-[#444653]'
-                        }`}
-                      >
-                        {opt.id === 'opt-1' ? 'OPTION 01' : opt.id === 'opt-2' ? 'OPTION 02' : 'OPTION 03'}
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
-                          isSelected
-                            ? 'bg-[#033aaf]/10 text-[#033aaf] font-bold'
-                            : 'bg-stone-100 text-[#444653]'
-                        }`}
-                      >
-                        {isSelected ? 'Simulating (Active)' : 'Alternative'}
-                      </span>
-                    </div>
-                    <h3 className="text-base font-bold text-[#1a1c1e]">{opt.name}</h3>
-                    <p className="text-xs text-[#444653] mt-1 leading-relaxed">{opt.description}</p>
-
-                    <div className="mt-4 space-y-1.5 font-mono text-xs border-t border-stone-100 pt-3">
-                      <div className="flex justify-between text-[#444653]">
-                        <span>Potential Reach:</span>
-                        <span className="font-bold text-[#1a1c1e]">{opt.potentialReach.toLocaleString()} people</span>
-                      </div>
-                      <div className="flex justify-between text-[#444653]">
-                        <span>Projected Infra:</span>
-                        <span className="font-bold text-[#033aaf]">{opt.projectedInfra.before} → {opt.projectedInfra.after}</span>
-                      </div>
-                      <div className="flex justify-between text-[#444653]">
-                        <span>Modeled Gap Reduction:</span>
-                        <span className="font-bold text-[#004f49]">{opt.gapReductionPercent}%</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <button
-                    className={`mt-4 w-full py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#033aaf] text-white shadow-2xs'
-                        : 'bg-[#f3f3f6] text-[#1a1c1e] hover:bg-[#e8e8ea]'
-                    }`}
-                  >
-                    {isSelected ? 'Selected Scenario' : 'Simulate Scenario'}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Section 8: Centerpiece Impact Simulator */}
-        <section className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 pb-4 border-b border-stone-100">
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[#033aaf] text-[20px]">science</span>
-                <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold">
-                  Interactive Modeling Engine
+                <span className="inline-block font-mono text-[10px] text-stone-400">
+                  Ref: {regionHotspots[0]?.id || 'N/A'}
                 </span>
               </div>
-              <h2 className="text-2xl font-bold text-[#1a1c1e] mt-1">
-                IMPACT SIMULATOR: {activeScenario.name}
+
+              {/* Step 3 */}
+              <div className="p-4 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
+                <span className="text-[10px] font-mono text-[#033aaf] font-bold block">3. GAP &amp; PRIORITY</span>
+                <span className="text-xs font-bold text-stone-900 block truncate">
+                  Gap: {regionGaps[0]?.developmentGapScore || 'N/A'} · Priority: {regionPriorities[0]?.priorityScore || 'N/A'}
+                </span>
+                <p className="text-[11px] text-stone-500 leading-snug">
+                  Triangulated with baseline access ({Math.round((infraProfile.indicators.roadAccessibility ?? 0.5) * 100)}%).
+                </p>
+                <span className="inline-block font-mono text-[10px] text-stone-400">
+                  Ref: {regionPriorities[0]?.id || 'N/A'}
+                </span>
+              </div>
+
+              {/* Step 4 */}
+              <div className="p-4 rounded-xl bg-teal-50/60 border border-teal-200 space-y-2">
+                <span className="text-[10px] font-mono text-teal-800 font-bold block">4. CANDIDATE INTERVENTION</span>
+                <span className="text-xs font-bold text-teal-950 block truncate">
+                  {regionProjects[0]?.projectTitle || 'Candidate Project'}
+                </span>
+                <p className="text-[11px] text-teal-800 leading-snug">
+                  Deterministic archetype for impact simulation modeling.
+                </p>
+                <span className="inline-block font-mono text-[10px] text-teal-600">
+                  Ref: {regionProjects[0]?.id || 'N/A'}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="p-8 text-center text-xs text-stone-400 font-mono">
+              Traceability pipeline is inactive when zero demand signals exist in the district.
+            </div>
+          )}
+        </section>
+
+        {/* ================================================================= */}
+        {/* STORY STAGE 7: Interactive Impact Simulation Engine */}
+        {/* ================================================================= */}
+        <section id="simulation-section" className="bg-white p-6 sm:p-8 rounded-2xl border border-stone-200/80 shadow-xs space-y-6">
+          <div className="border-b border-stone-200 pb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold tracking-wider">
+                Step 6 of 6 · Interactive Scenario Evaluation
+              </span>
+              <h2 className="text-xl sm:text-2xl font-bold text-[#1a1c1e] tracking-tight mt-0.5">
+                Impact Simulation Engine for {districtMeta.name}
               </h2>
-            </div>
-            <span className="px-3 py-1 rounded-full bg-[#f3f3f6] text-[#444653] font-mono text-[11px] border border-stone-200">
-              Illustrative scenario · Not a funding recommendation
-            </span>
-          </div>
-
-          {/* Before vs After Cards Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch my-6">
-            {/* Before (Baseline) */}
-            <div className="lg:col-span-5 bg-[#f3f3f6] rounded-xl p-5 flex flex-col justify-between border border-stone-200">
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-xs uppercase font-bold text-[#444653]">BASELINE SITUATION (CURRENT)</span>
-                <span className="px-2 py-0.5 rounded bg-[#ffdad6] text-[#ba1a1a] font-mono text-[10px] font-bold">
-                  Unmitigated
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-3 my-2">
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">Infra Index</span>
-                  <span className="text-2xl font-mono font-bold text-[#1a1c1e]">31</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">Affected Pop</span>
-                  <span className="text-2xl font-mono font-bold text-[#1a1c1e]">72,400</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">Unresolved Reqs</span>
-                  <span className="text-2xl font-mono font-bold text-[#9e4200]">1,284</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">All-Weather Access</span>
-                  <span className="text-2xl font-mono font-bold text-[#1a1c1e]">38%</span>
-                </div>
-              </div>
-              <div className="mt-3 pt-3 border-t border-stone-200 flex justify-between items-center">
-                <span className="text-xs font-mono text-[#444653] uppercase">Current Gap Score</span>
-                <span className="text-lg font-mono font-bold text-[#ba1a1a]">84 / 100</span>
-              </div>
+              <p className="text-xs sm:text-sm text-[#444653] mt-1">
+                Explore hypothetical intervention outcomes by adjusting coverage and implementation effectiveness assumptions.
+              </p>
             </div>
 
-            {/* Delta Transition Indicator */}
-            <div className="lg:col-span-2 flex flex-col items-center justify-center py-4 text-center">
-              <div className="w-10 h-10 rounded-full bg-[#dce1ff] flex items-center justify-center text-[#033aaf] mb-2 shadow-2xs">
-                <span className="material-symbols-outlined text-[20px]">arrow_forward</span>
-              </div>
-              <span className="text-xs font-bold text-[#033aaf] uppercase">{activeScenario.transformLabel}</span>
-              <span className="text-[11px] font-mono text-[#747685] mt-0.5">{activeScenario.transformSub}</span>
-            </div>
-
-            {/* After (Modeled Projection) */}
-            <div className="lg:col-span-5 bg-[#004f49]/5 rounded-xl p-5 flex flex-col justify-between border border-[#004f49]/20">
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-xs uppercase font-bold text-[#004f49]">MODELED PROJECTION (AFTER)</span>
-                <span className="px-2 py-0.5 rounded bg-[#9cf2e8] text-[#00201d] font-mono text-[10px] font-bold">
-                  Simulated Outcome
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-3 my-2">
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">Infra Index</span>
-                  <span className="text-2xl font-mono font-bold text-[#004f49]">{activeScenario.projectedInfra.after}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">Affected Pop</span>
-                  <span className="text-2xl font-mono font-bold text-[#1a1c1e]">{activeScenario.afterPop.toLocaleString()}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">Unresolved Reqs</span>
-                  <span className="text-2xl font-mono font-bold text-[#1a1c1e]">{activeScenario.afterReqs}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono text-[#747685] block uppercase">All-Weather Access</span>
-                  <span className="text-2xl font-mono font-bold text-[#004f49]">{activeScenario.afterAccessPercent}%</span>
-                </div>
-              </div>
-              <div className="mt-3 pt-3 border-t border-[#004f49]/20 flex justify-between items-center">
-                <span className="text-xs font-mono text-[#004f49] uppercase font-bold">Projected Gap Score</span>
-                <span className="text-lg font-mono font-bold text-[#004f49]">
-                  {activeScenario.projectedGapScore} / 100
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Comparative Gap Meters */}
-          <div className="bg-[#f3f3f6] rounded-xl p-5 my-4 border border-stone-200">
-            <div className="flex flex-col gap-4">
-              <div>
-                <div className="flex justify-between text-xs font-semibold mb-1">
-                  <span>Current Gap</span>
-                  <span className="font-mono text-[#ba1a1a] font-bold">84 / 100 (HIGH)</span>
-                </div>
-                <div className="w-full bg-stone-200 h-3 rounded-full overflow-hidden">
-                  <div className="bg-[#ba1a1a] h-3 rounded-full transition-all duration-500" style={{ width: '84%' }}></div>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex justify-between text-xs font-semibold mb-1">
-                  <span>Modeled Scenario Gap</span>
-                  <span className="font-mono text-[#004f49] font-bold">
-                    {activeScenario.projectedGapScore} / 100 ({activeScenario.projectedGapScore <= 40 ? 'MODERATE' : 'MODERATE-HIGH'})
-                  </span>
-                </div>
-                <div className="w-full bg-stone-200 h-3 rounded-full overflow-hidden">
-                  <div
-                    className="bg-[#004f49] h-3 rounded-full transition-all duration-500"
-                    style={{ width: `${activeScenario.projectedGapScore}%` }}
-                  ></div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-stone-200 text-xs">
+            {regionProjects.length > 0 && (
               <div className="flex items-center gap-2">
-                <span className="px-2.5 py-1 rounded bg-[#9cf2e8] text-[#00201d] font-bold font-mono">
-                  {activeScenario.gapReductionPercent}% Modeled Gap Reduction
-                </span>
-                <span className="text-[#444653]">Calibrated against PMGSY tier-2 guidelines</span>
+                <span className="text-xs font-mono text-stone-500">Project:</span>
+                <select
+                  value={activeProject?.id || ''}
+                  onChange={(e) => setActiveProjectId(e.target.value)}
+                  className="bg-stone-50 border border-stone-200 rounded-lg px-3 py-1.5 text-xs font-semibold text-stone-800 focus:outline-none focus:ring-1 focus:ring-[#033aaf]"
+                >
+                  {regionProjects.map((proj) => (
+                    <option key={proj.id} value={proj.id}>
+                      {proj.projectTitle}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="flex items-center gap-4 font-mono text-[#444653]">
-                <span>Isolation Reduced: <strong className="text-[#1a1c1e]">{activeScenario.popReduced.toLocaleString()} people</strong></span>
-                <span>Needs Addressed: <strong className="text-[#1a1c1e]">{activeScenario.reqsAddressed} requests</strong></span>
-              </div>
-            </div>
+            )}
           </div>
 
-          {/* Expandable Scenario Assumptions */}
-          <details className="group bg-[#f3f3f6] rounded-lg p-3 text-[#1a1c1e] border border-stone-200">
-            <summary className="cursor-pointer text-xs font-bold flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-[18px]">info</span>
-                View Modeling Parameters &amp; Assumptions
-              </span>
-              <span className="material-symbols-outlined text-[18px] transition-transform group-open:rotate-180">
-                expand_more
-              </span>
-            </summary>
-            <div className="mt-3 space-y-1.5 text-xs text-[#444653] pl-6 border-t border-stone-200 pt-2">
-              <p>• Infrastructure lift calibrated against PMGSY Tier-2 rural specifications.</p>
-              <p>• Primary catchment population directly connected to primary health centre within 20 mins.</p>
-              <p>• Calculations assume unhindered dry-season construction window (November–May).</p>
-              <p>• All figures represent synthetic demo projections for deliberation.</p>
+          {activeProject && simulationResult ? (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              {/* Left Column: Interactive Scenario Controls */}
+              <div className="lg:col-span-5 space-y-6 bg-stone-50 p-6 rounded-2xl border border-stone-200">
+                <div>
+                  <h3 className="text-sm font-bold text-[#1a1c1e]">Scenario Configuration</h3>
+                  <p className="text-xs text-stone-500 mt-0.5">
+                    Select a standardized preset or adjust parameters freely.
+                  </p>
+                </div>
+
+                {/* Preset Scenario Buttons */}
+                <div className="grid grid-cols-3 gap-2">
+                  {(['conservative', 'balanced', 'highCoverage'] as const).map((pKey) => {
+                    const preset = PRESET_SCENARIOS[pKey];
+                    const isActive = activePreset === pKey;
+                    return (
+                      <button
+                        key={pKey}
+                        onClick={() => handlePresetSelect(pKey)}
+                        className={`p-2.5 rounded-xl text-left transition-all border cursor-pointer ${
+                          isActive
+                            ? 'bg-[#033aaf] text-white border-[#033aaf] shadow-xs'
+                            : 'bg-white text-stone-700 border-stone-200 hover:border-stone-300'
+                        }`}
+                      >
+                        <span className="text-xs font-bold block">{preset.name}</span>
+                        <span className={`text-[10px] font-mono block mt-0.5 ${isActive ? 'text-white/80' : 'text-stone-500'}`}>
+                          {preset.coverage}% / {preset.effectiveness}%
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Slider 1: Intervention Coverage */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-xs">
+                    <label className="font-semibold text-stone-800">
+                      Intervention Coverage:
+                    </label>
+                    <span className="font-mono font-bold text-[#033aaf] bg-white px-2 py-0.5 rounded border border-stone-200">
+                      {scenarioCoverage}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={scenarioCoverage}
+                    onChange={(e) => handleSliderChange('coverage', Number(e.target.value))}
+                    className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-[#033aaf]"
+                  />
+                  <div className="flex justify-between text-[10px] font-mono text-stone-400">
+                    <span>0% (No rollout)</span>
+                    <span>100% (Universal)</span>
+                  </div>
+                </div>
+
+                {/* Slider 2: Implementation Effectiveness */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-xs">
+                    <label className="font-semibold text-stone-800">
+                      Implementation Effectiveness:
+                    </label>
+                    <span className="font-mono font-bold text-[#0F766E] bg-white px-2 py-0.5 rounded border border-stone-200">
+                      {scenarioEffectiveness}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={scenarioEffectiveness}
+                    onChange={(e) => handleSliderChange('effectiveness', Number(e.target.value))}
+                    className="w-full h-2 bg-stone-200 rounded-lg appearance-none cursor-pointer accent-[#0F766E]"
+                  />
+                  <div className="flex justify-between text-[10px] font-mono text-stone-400">
+                    <span>0% (Failed)</span>
+                    <span>100% (Optimal)</span>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-stone-200 text-[11px] text-stone-500 font-mono">
+                  Combined Strength: <strong>{((scenarioCoverage / 100) * (scenarioEffectiveness / 100) * 100).toFixed(1)}%</strong>
+                </div>
+              </div>
+
+              {/* Right Column: Projected Scenario Outcomes */}
+              <div className="lg:col-span-7 space-y-6">
+                <div>
+                  <h3 className="text-sm font-bold text-[#1a1c1e]">Projected Scenario Outcomes</h3>
+                  <p className="text-xs text-stone-500 mt-0.5">
+                    Estimated under {scenarioCoverage}% coverage and {scenarioEffectiveness}% implementation effectiveness.
+                  </p>
+                </div>
+
+                {/* Score Comparison Cards */}
+                <div className="grid grid-cols-2 gap-4">
+                  {/* Baseline */}
+                  <div className="p-5 rounded-2xl bg-stone-100/80 border border-stone-200 space-y-2">
+                    <span className="text-[10px] font-mono text-stone-500 uppercase font-bold block">
+                      Baseline Gap Score
+                    </span>
+                    <div className="text-3xl sm:text-4xl font-mono font-extrabold text-stone-800">
+                      {simulationResult.baseline.developmentGapScore}
+                      <span className="text-sm font-normal text-stone-500">/100</span>
+                    </div>
+                    <span className="text-xs text-stone-500 block">
+                      Current unmitigated deficit
+                    </span>
+                  </div>
+
+                  {/* Projected Residual */}
+                  <div className="p-5 rounded-2xl bg-teal-50 border border-teal-200 space-y-2">
+                    <span className="text-[10px] font-mono text-teal-800 uppercase font-bold block">
+                      Projected Residual Gap
+                    </span>
+                    <div className="text-3xl sm:text-4xl font-mono font-extrabold text-teal-900">
+                      {simulationResult.projected.residualDevelopmentGap}
+                      <span className="text-sm font-normal text-teal-700">/100</span>
+                    </div>
+                    <span className="text-xs text-teal-800 font-semibold block">
+                      Reduction: −{simulationResult.projected.developmentGapReduction} pts ({simulationResult.impact.gapReductionPercent}%)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Specific Modeled Reductions */}
+                <div className="grid grid-cols-3 gap-3 text-xs">
+                  <div className="p-3 bg-white rounded-xl border border-stone-200 space-y-1">
+                    <span className="text-[10px] font-mono text-stone-500 uppercase block">Modeled Demand Red</span>
+                    <span className="text-lg font-mono font-bold text-[#033aaf]">
+                      {simulationResult.impact.demandReductionPercent}%
+                    </span>
+                  </div>
+                  <div className="p-3 bg-white rounded-xl border border-stone-200 space-y-1">
+                    <span className="text-[10px] font-mono text-stone-500 uppercase block">Infra Improvement</span>
+                    <span className="text-lg font-mono font-bold text-[#0F766E]">
+                      {simulationResult.impact.infrastructureImprovementPercent}%
+                    </span>
+                  </div>
+                  <div className="p-3 bg-white rounded-xl border border-stone-200 space-y-1">
+                    <span className="text-[10px] font-mono text-stone-500 uppercase block">Service Reach</span>
+                    <span className="text-lg font-mono font-bold text-[#E06D28]">
+                      {simulationResult.impact.serviceReachPercent}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Explainable Scenario Narrative */}
+                <div className="p-4 bg-stone-50 rounded-xl border border-stone-200/80 space-y-1.5">
+                  <span className="text-[10px] font-mono text-stone-500 uppercase font-bold block">
+                    Modeled Scenario Explanation:
+                  </span>
+                  <p className="text-xs text-[#444653] leading-relaxed">
+                    {simulationResult.explanation}
+                  </p>
+                </div>
+              </div>
             </div>
-          </details>
+          ) : (
+            <div className="p-8 text-center text-xs text-stone-400 font-mono">
+              Select a valid candidate project to run scenario simulations.
+            </div>
+          )}
         </section>
 
-        {/* Section 9: Scenario Comparison Table */}
-        <section className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80">
-          <div className="flex flex-col gap-1 mb-4">
-            <span className="text-[10px] font-mono text-[#033aaf] uppercase font-bold">Side-by-Side Analysis</span>
-            <h2 className="text-lg font-bold text-[#1a1c1e]">Scenario Comparison Table</h2>
-            <p className="text-xs text-[#444653]">
-              Strictly objective comparative assessment. Baat2Badlav does not rank or label a "winner".
+        {/* ================================================================= */}
+        {/* FOOTER CALL TO ACTION & TRANSPARENCY NOTE */}
+        {/* ================================================================= */}
+        <section className="p-6 sm:p-8 rounded-2xl bg-[#111315] text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-md">
+          <div className="space-y-1.5 max-w-2xl">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-[#0F766E]"></span>
+              <span className="text-xs font-mono text-stone-400 uppercase font-semibold">
+                Transparent Civic Intelligence
+              </span>
+            </div>
+            <h3 className="text-lg sm:text-xl font-bold tracking-tight">
+              Ready to explore statewide demand signals?
+            </h3>
+            <p className="text-xs sm:text-sm text-stone-400 leading-relaxed">
+              Compare regional development gaps across multiple districts, inspect data lineages, or submit a new citizen voice note.
             </p>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs sm:text-sm min-w-[760px]">
-              <thead className="bg-[#f3f3f6] text-[#444653] text-[10px] font-mono uppercase">
-                <tr>
-                  <th className="py-2.5 px-4 rounded-l-lg">Intervention Name</th>
-                  <th className="py-2.5 px-4">Population Reached</th>
-                  <th className="py-2.5 px-4">Projected Infra</th>
-                  <th className="py-2.5 px-4">Unresolved Demand Left</th>
-                  <th className="py-2.5 px-4">Modeled Gap Reduction</th>
-                  <th className="py-2.5 px-4 rounded-r-lg">Capital Intensity</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-100 text-[#1a1c1e]">
-                {Object.values(NADIA_INTERVENTIONS).map((item) => {
-                  const isActive = selectedScenarioId === item.id;
-                  return (
-                    <tr
-                      key={item.id}
-                      onClick={() => setSelectedScenarioId(item.id)}
-                      className={`cursor-pointer transition-colors ${
-                        isActive ? 'bg-[#dce1ff]/30 font-semibold' : 'hover:bg-stone-50'
-                      }`}
-                    >
-                      <td className="py-3 px-4 font-semibold text-[#033aaf]">
-                        {item.name} {isActive ? '(Active)' : ''}
-                      </td>
-                      <td className="py-3 px-4 font-mono">{item.potentialReach.toLocaleString()} residents</td>
-                      <td className="py-3 px-4 font-mono">{item.projectedInfra.before} → {item.projectedInfra.after}</td>
-                      <td className="py-3 px-4 font-mono">{item.afterReqs} requests</td>
-                      <td className="py-3 px-4 font-mono text-[#004f49] font-bold">{item.gapReductionPercent}%</td>
-                      <td className="py-3 px-4 font-mono text-[#444653]">{item.capitalIntensity}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        {/* Section 10: Human Decision Boundary & Provenance */}
-        <section className="bg-white rounded-xl p-6 sm:p-8 shadow-sm border border-stone-200/80">
-          <div className="bg-[#f3f3f6] rounded-xl p-4 sm:p-5 mb-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border border-stone-200">
-            <div className="flex items-start gap-3">
-              <span className="material-symbols-outlined text-[#9e4200] text-[24px]">gavel</span>
-              <div>
-                <h3 className="text-base font-bold text-[#1a1c1e]">Evidence, not automated policy.</h3>
-                <p className="text-xs sm:text-sm text-[#444653] max-w-3xl mt-0.5 leading-relaxed">
-                  Baat2Badlav identifies patterns, calculates transparent indicators, and models scenario outcomes. Final decisions regarding public fund allocations, project tenders, and civic priorities remain exclusively with elected representatives, planners, and community bodies.
-                </p>
-              </div>
-            </div>
-            <span className="inline-flex items-center px-3 py-1 rounded bg-[#ffdbcb] text-[#793100] text-xs font-mono font-semibold whitespace-nowrap">
-              Constitutional Demarcation
-            </span>
-          </div>
-
-          {/* Provenance Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 text-[#1a1c1e]">
-            <div className="bg-[#f3f3f6] p-3 rounded-lg border border-stone-200">
-              <span className="text-[10px] font-mono text-[#747685] uppercase block">Citizen Requests</span>
-              <span className="text-xs font-bold block mt-1">Multilingual Voice &amp; Text</span>
-              <span className="text-[10px] font-mono text-[#444653]">Synthetic demo dataset</span>
-            </div>
-            <div className="bg-[#f3f3f6] p-3 rounded-lg border border-stone-200">
-              <span className="text-[10px] font-mono text-[#747685] uppercase block">Demographics</span>
-              <span className="text-xs font-bold block mt-1">Census Catchment</span>
-              <span className="text-[10px] font-mono text-[#444653]">Office of Registrar General</span>
-            </div>
-            <div className="bg-[#f3f3f6] p-3 rounded-lg border border-stone-200">
-              <span className="text-[10px] font-mono text-[#747685] uppercase block">Infrastructure</span>
-              <span className="text-xs font-bold block mt-1">PMGSY &amp; State PWD GIS</span>
-              <span className="text-[10px] font-mono text-[#444653]">GIS spatial layer v2.4</span>
-            </div>
-            <div className="bg-[#f3f3f6] p-3 rounded-lg border border-stone-200">
-              <span className="text-[10px] font-mono text-[#747685] uppercase block">Investment</span>
-              <span className="text-xs font-bold block mt-1">PFMS Demo Registry</span>
-              <span className="text-[10px] font-mono text-[#444653]">Tender &amp; sanctions tracking</span>
-            </div>
-            <div className="bg-[#f3f3f6] p-3 rounded-lg border border-stone-200">
-              <span className="text-[10px] font-mono text-[#747685] uppercase block">AI Engine</span>
-              <span className="text-xs font-bold block mt-1">Gemini 1.5 Pro</span>
-              <span className="text-[10px] font-mono text-[#444653]">Explanation modality only</span>
-            </div>
-            <div className="bg-[#f3f3f6] p-3 rounded-lg border border-stone-200">
-              <span className="text-[10px] font-mono text-[#747685] uppercase block">Calculation</span>
-              <span className="text-xs font-bold block mt-1">Transparent Deterministic</span>
-              <span className="text-[10px] font-mono text-[#444653]">No black-box scoring</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Section 11: Persistent Action Bar */}
-        <section className="bg-white rounded-xl p-4 sm:p-5 shadow-sm border border-stone-200/80 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-2 text-xs text-[#444653]">
-            <span className="material-symbols-outlined text-[#747685] text-[18px]">verified_user</span>
-            <span>Dossier verified for multi-stakeholder civil deliberation.</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
             <button
               onClick={() => onNavigate('/dashboard')}
-              className="px-4 py-2.5 rounded-lg bg-[#f3f3f6] hover:bg-[#e8e8ea] text-[#1a1c1e] text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer border border-stone-200"
+              className="px-5 py-2.5 rounded-full bg-white text-stone-900 hover:bg-stone-100 text-xs font-bold transition-all cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[18px]">travel_explore</span>
-              <span>Explore Another Region</span>
+              Explore Master Dashboard
             </button>
             <button
-              onClick={handleExportPDF}
-              className="px-4 py-2.5 rounded-lg bg-[#f3f3f6] hover:bg-[#e8e8ea] text-[#1a1c1e] text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer border border-stone-200"
+              onClick={() => onNavigate('/citizen')}
+              className="px-5 py-2.5 rounded-full bg-[#E06D28] text-white hover:bg-orange-600 text-xs font-bold transition-all cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[18px]">download</span>
-              <span>Export Deliberation Dossier (PDF)</span>
-            </button>
-            <button
-              onClick={() => onNavigate('/dashboard')}
-              className="px-4 py-2.5 rounded-lg bg-[#033aaf] hover:bg-[#063baf] text-white text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-[18px]">view_list</span>
-              <span>View All 84 Development Gaps</span>
+              Share Citizen Voice
             </button>
           </div>
         </section>

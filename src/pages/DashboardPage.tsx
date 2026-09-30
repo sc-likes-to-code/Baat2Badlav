@@ -30,12 +30,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   };
 
   const handleInspectDossier = (hotspotId: string) => {
-    if (hotspotId === 'nadia') {
-      onNavigate('/dashboard/region/nadia');
+    const found = HOTSPOTS.find((h) => h.id === hotspotId);
+    if (found && found.id) {
+      onNavigate(`/dashboard/region/${found.id.toLowerCase()}`);
+    } else if (hotspotId) {
+      onNavigate(`/dashboard/region/${hotspotId.toLowerCase()}`);
     } else {
-      const found = HOTSPOTS.find((h) => h.id === hotspotId);
-      if (found) setSelectedHotspot(found);
-      window.scrollTo({ top: 400, behavior: 'smooth' });
+      onNavigate('/dashboard/region/nadia');
     }
   };
 
@@ -592,7 +593,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             {/* Action CTAs */}
             <div className="space-y-2 pt-2">
               <button
-                onClick={() => onNavigate('/dashboard/region/nadia')}
+                onClick={() => handleInspectDossier(selectedHotspot.id)}
                 className="w-full py-3 px-4 rounded-xl bg-[#033aaf] hover:bg-[#063baf] text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2 shadow-sm transition-colors text-center cursor-pointer"
               >
                 <span>Open Region Intelligence</span>
