@@ -6,6 +6,7 @@ interface AIInterpretationPageProps {
   submission: CitizenSubmission | null;
   interpretation?: CitizenAIInterpretation | null;
   onSaveInterpretation?: (interpretation: CitizenAIInterpretation) => void;
+  onInterpretationFailure?: (submissionId: string, errorMessage: string) => void;
   onEditSubmission?: () => void;
   onNewSubmission?: () => void;
 }
@@ -27,10 +28,10 @@ export const AIInterpretationPage: React.FC<AIInterpretationPageProps> = ({
   submission,
   interpretation: initialInterpretation,
   onSaveInterpretation,
+  onInterpretationFailure,
   onEditSubmission,
   onNewSubmission,
 }) => {
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [interpretation, setInterpretation] = useState<CitizenAIInterpretation | null>(
     initialInterpretation || null
   );
@@ -89,19 +90,23 @@ export const AIInterpretationPage: React.FC<AIInterpretationPageProps> = ({
       } catch (err: any) {
         clearTimeout(timeoutId);
         console.error('[AIInterpretationPage] Error interpreting submission:', err);
-        if (err.name === 'AbortError') {
-          setError('Interpretation request timed out. Please check your connection and click Try Again.');
-        } else {
-          setError(err?.message || 'An unexpected error occurred while processing AI interpretation.');
-          if (err?.message?.includes('GEMINI_API_KEY') || err?.message?.includes('API key')) {
-            setErrorCode('MISSING_API_KEY');
-          }
+        const errMsg = err.name === 'AbortError'
+          ? 'Interpretation request timed out. Please check your connection and click Try Again.'
+          : (err?.message || 'An unexpected error occurred while processing AI interpretation.');
+        
+        setError(errMsg);
+        if (err?.message?.includes('GEMINI_API_KEY') || err?.message?.includes('API key')) {
+          setErrorCode('MISSING_API_KEY');
+        }
+
+        if (onInterpretationFailure) {
+          onInterpretationFailure(sub.id, errMsg);
         }
       } finally {
         setIsLoading(false);
       }
     },
-    [onSaveInterpretation]
+    [onSaveInterpretation, onInterpretationFailure]
   );
 
   // Deterministic automatic trigger: fires exactly once per unique submission ID
@@ -163,10 +168,6 @@ export const AIInterpretationPage: React.FC<AIInterpretationPageProps> = ({
   const userGeoAnchor = `${submission.location.districtName}, ${submission.location.stateName}`;
   const isVoiceInput = submission.inputMode === 'voice';
   const durationSec = submission.recordingDurationSeconds || 7;
-
-  const toggleAudio = () => {
-    setIsPlayingAudio(!isPlayingAudio);
-  };
 
   const handleBackToEdit = () => {
     if (onEditSubmission) {
@@ -325,50 +326,6 @@ export const AIInterpretationPage: React.FC<AIInterpretationPageProps> = ({
                   Category: {userCategory}
                 </span>
               </div>
-
-              {/* Audio Player Widget if Voice Mode was selected */}
-              {isVoiceInput && (
-                <div className="p-4 rounded-xl bg-[#eeeef0] flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <button
-                        aria-label="Play sample"
-                        onClick={toggleAudio}
-                        className="w-10 h-10 rounded-full bg-[#033aaf] text-white flex items-center justify-center shadow hover:bg-[#063baf] transition-colors cursor-pointer"
-                        type="button"
-                      >
-                        <span className="material-symbols-outlined text-xl">
-                          {isPlayingAudio ? 'pause' : 'play_arrow'}
-                        </span>
-                      </button>
-                      <div className="flex flex-col">
-                        <span className="text-xs font-bold text-[#1a1c1e]">Audio Simulation #{submission.id.slice(-4)}</span>
-                        <span className="text-[11px] font-mono text-[#444653]">00:{durationSec < 10 ? '0' : ''}${durationSec} / 01:00</span>
-                      </div>
-                    </div>
-                    <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-white text-[#1a1c1e] font-semibold border border-stone-200">
-                      1.0x
-                    </span>
-                  </div>
-
-                  {/* Custom Waveform */}
-                  <div aria-hidden="true" className="w-full flex items-center gap-1 h-8 pt-1">
-                    {[12, 20, 28, 16, 24, 32, 20, 12, 24, 28, 16, 20, 28, 12, 24, 8, 16, 20, 12, 28, 16, 8].map(
-                      (height, idx) => (
-                        <span
-                          key={idx}
-                          className={`w-1 rounded-full transition-all ${
-                            idx < 11
-                              ? isPlayingAudio ? 'bg-[#033aaf] animate-pulse' : 'bg-[#033aaf]'
-                              : 'bg-[#033aaf]/30'
-                          }`}
-                          style={{ height: `${height}px` }}
-                        ></span>
-                      )
-                    )}
-                  </div>
-                </div>
-              )}
 
               {/* Location Metadata */}
               <div className="flex items-center gap-2 pt-1 text-sm font-medium text-[#1a1c1e]">

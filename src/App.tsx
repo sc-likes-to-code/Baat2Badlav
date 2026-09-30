@@ -18,6 +18,7 @@ import {
   CitizenSubmission,
   CitizenFormDraft,
   CitizenAIInterpretation,
+  LiveCitizenRecord,
 } from './types/citizen';
 
 export default function App() {
@@ -37,6 +38,9 @@ export default function App() {
   };
 
   const [currentPath, setCurrentPath] = useState<string>(getInitialPath);
+  // Session-wide accumulator of ALL successful live citizen submissions with lifecycle state
+  const [liveSubmissions, setLiveSubmissions] = useState<LiveCitizenRecord[]>([]);
+  // Currently active submission for /citizen/result drilldown
   const [currentSubmission, setCurrentSubmission] = useState<CitizenSubmission | null>(null);
   const [currentInterpretation, setCurrentInterpretation] = useState<CitizenAIInterpretation | null>(null);
   const [formDraft, setFormDraft] = useState<CitizenFormDraft | null>(null);
@@ -76,6 +80,75 @@ export default function App() {
       setCurrentInterpretation(null);
     }
     setCurrentSubmission(sub);
+
+    // Register in liveSubmissions session accumulator with explicit PENDING_INTERPRETATION lifecycle
+    setLiveSubmissions((prev) => {
+      const existingIdx = prev.findIndex((item) => item.submission.id === sub.id);
+      const nextList = existingIdx >= 0
+        ? prev
+        : [
+            ...prev,
+            {
+              submission: sub,
+              interpretation: null,
+              status: 'PENDING_INTERPRETATION' as const,
+            },
+          ];
+
+      console.log('[Runtime Trace 2 - App: handleSubmitSubmission]', {
+        submissionId: sub.id,
+        liveCount: nextList.length,
+        liveIds: nextList.map((s) => s.submission.id),
+        status: 'PENDING_INTERPRETATION',
+        hasInterpretation: false,
+      });
+
+      return nextList;
+    });
+  };
+
+  const handleSaveInterpretation = (interp: CitizenAIInterpretation) => {
+    setCurrentInterpretation(interp);
+    if (currentSubmission) {
+      setLiveSubmissions((prev) => {
+        const nextList = prev.map((item) =>
+          item.submission.id === currentSubmission.id
+            ? { ...item, interpretation: interp, status: 'INTERPRETED' as const }
+            : item
+        );
+
+        console.log('[Runtime Trace 3 - App: Gemini Success Callback]', {
+          submissionId: currentSubmission.id,
+          liveCount: nextList.length,
+          liveIds: nextList.map((s) => s.submission.id),
+          status: 'INTERPRETED',
+          hasInterpretation: true,
+          primaryIssue: interp.primaryIssue,
+        });
+
+        return nextList;
+      });
+    }
+  };
+
+  const handleInterpretationFailure = (submissionId: string, errorMsg: string) => {
+    setLiveSubmissions((prev) => {
+      const nextList = prev.map((item) =>
+        item.submission.id === submissionId
+          ? { ...item, interpretation: null, status: 'FAILED' as const, error: errorMsg }
+          : item
+      );
+
+      console.log('[Runtime Trace 3b - App: Gemini Failure Callback]', {
+        submissionId,
+        liveCount: nextList.length,
+        liveIds: nextList.map((s) => s.submission.id),
+        status: 'FAILED',
+        error: errorMsg,
+      });
+
+      return nextList;
+    });
   };
 
   const handleSaveDraft = (draft: CitizenFormDraft) => {
@@ -115,16 +188,28 @@ export default function App() {
           onNavigate={handleNavigate}
           submission={currentSubmission}
           interpretation={currentInterpretation}
-          onSaveInterpretation={setCurrentInterpretation}
+          onSaveInterpretation={handleSaveInterpretation}
+          onInterpretationFailure={handleInterpretationFailure}
           onEditSubmission={handleEditSubmission}
           onNewSubmission={handleNewSubmission}
         />
       );
     }
     if (currentPath === '/dashboard') {
+      console.log('[Runtime Trace 4 - App: rendering DashboardPage]', {
+        liveCount: liveSubmissions.length,
+        liveIds: liveSubmissions.map((s) => s.submission.id),
+        liveSubmissions: liveSubmissions.map((s) => ({
+          id: s.submission.id,
+          status: s.status,
+          hasInterpretation: !!s.interpretation,
+        })),
+      });
+
       return (
         <DashboardPage
           onNavigate={handleNavigate}
+          liveSubmissions={liveSubmissions}
           liveSubmission={currentSubmission}
           liveInterpretation={currentInterpretation}
         />
@@ -135,6 +220,7 @@ export default function App() {
         <RegionIntelligencePage
           onNavigate={handleNavigate}
           currentPath={currentPath}
+          liveSubmissions={liveSubmissions}
           liveSubmission={currentSubmission}
           liveInterpretation={currentInterpretation}
         />

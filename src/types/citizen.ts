@@ -74,3 +74,13 @@ export interface InterpretApiResponse {
   error?: string;
   code?: string;
 }
+
+export type LiveSubmissionStatus = 'PENDING_INTERPRETATION' | 'INTERPRETED' | 'FAILED';
+
+export interface LiveCitizenRecord {
+  submission: CitizenSubmission;
+  interpretation: CitizenAIInterpretation | null;
+  status: LiveSubmissionStatus;
+  error?: string;
+}
+

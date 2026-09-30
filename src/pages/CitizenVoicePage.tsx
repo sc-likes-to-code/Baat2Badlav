@@ -13,6 +13,7 @@ import {
   getStateName,
   getDistrictName,
 } from '../data/locations';
+import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 
 interface CitizenVoicePageProps {
   onNavigate: (path: string) => void;
@@ -38,8 +39,6 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
 }) => {
   const [selectedLanguage, setSelectedLanguage] = useState<LanguageCode>(draft?.language || 'en');
   const [inputMode, setInputMode] = useState<InputMode>(draft?.inputMode || 'voice');
-  const [isRecording, setIsRecording] = useState<boolean>(draft?.isRecording ?? false);
-  const [isPaused, setIsPaused] = useState<boolean>(draft?.isPaused ?? false);
   const [seconds, setSeconds] = useState<number>(draft?.recordingSeconds ?? 0);
   const [inputText, setInputText] = useState<string>(draft?.text ?? '');
   const [selectedCategory, setSelectedCategory] = useState<CivicCategory | ''>(draft?.category || '');
@@ -51,13 +50,41 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
   const [errors, setErrors] = useState<CitizenFormValidationErrors>({});
   const [piiWarning, setPiiWarning] = useState<string | null>(null);
 
+  // Real Web Speech API & MediaRecorder voice hook
+  const {
+    isSupported: isVoiceSupported,
+    isSpeechRecognitionSupported,
+    isRequestingPermission,
+    isRecording,
+    recordingSeconds: speechSeconds,
+    error: speechError,
+    startRecording: startVoiceRecording,
+    stopRecording: stopVoiceRecording,
+    clearError: clearSpeechError,
+  } = useSpeechRecognition({
+    language: selectedLanguage,
+    onTranscriptChange: (newTranscript) => {
+      setInputText(newTranscript);
+      setInputMode('voice');
+      if (errors.text) {
+        setErrors((prev) => ({ ...prev, text: undefined }));
+      }
+    },
+    maxDurationSeconds: 60,
+  });
+
+  // Keep duration seconds in sync with active recording
+  useEffect(() => {
+    if (isRecording) {
+      setSeconds(speechSeconds);
+    }
+  }, [isRecording, speechSeconds]);
+
   // Synchronize state ONLY when the draft prop reference changes externally (e.g., on reset or edit restore)
   useEffect(() => {
     if (draft) {
       setSelectedLanguage(draft.language || 'en');
       setInputMode(draft.inputMode || 'voice');
-      setIsRecording(draft.isRecording ?? false);
-      setIsPaused(draft.isPaused ?? false);
       setSeconds(draft.recordingSeconds ?? 0);
       setInputText(draft.text ?? '');
       setSelectedCategory(draft.category || '');
@@ -67,8 +94,6 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
     } else {
       setSelectedLanguage('en');
       setInputMode('voice');
-      setIsRecording(false);
-      setIsPaused(false);
       setSeconds(0);
       setInputText('');
       setSelectedCategory('');
@@ -97,24 +122,22 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
     }
   }, [inputText]);
 
-  // Timer effect for voice simulation
-  useEffect(() => {
-    let interval: any = null;
-    if (isRecording && !isPaused && seconds < 60) {
-      interval = setInterval(() => {
-        setSeconds((prev) => (prev >= 60 ? 60 : prev + 1));
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isRecording, isPaused, seconds]);
-
   const handleMicToggle = () => {
+    console.log('[CitizenVoicePage] Microphone button clicked, isRecording =', isRecording);
     setInputMode('voice');
-    if (!isRecording) {
-      setIsRecording(true);
-      setIsPaused(false);
+    if (isRecording) {
+      stopVoiceRecording();
     } else {
-      setIsRecording(false);
+      clearSpeechError();
+      startVoiceRecording(inputText, selectedLanguage);
+    }
+  };
+
+  const handleLanguageSelect = (lang: LanguageCode) => {
+    console.log('[CitizenVoicePage] Language selected:', lang);
+    setSelectedLanguage(lang);
+    if (isRecording) {
+      stopVoiceRecording();
     }
   };
 
@@ -178,6 +201,12 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
       return;
     }
 
+    const finalRecordingSeconds = isRecording
+      ? speechSeconds
+      : seconds > 0
+      ? seconds
+      : speechSeconds;
+
     const currentDraft: CitizenFormDraft = {
       language: selectedLanguage,
       inputMode,
@@ -188,7 +217,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
       category: selectedCategory as CivicCategory,
       isRecording: false,
       isPaused: false,
-      recordingSeconds: seconds,
+      recordingSeconds: finalRecordingSeconds,
     };
 
     if (onSaveDraft) {
@@ -210,7 +239,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
       },
       category: selectedCategory as CivicCategory,
       createdAt: new Date().toISOString(),
-      recordingDurationSeconds: inputMode === 'voice' && seconds > 0 ? seconds : undefined,
+      recordingDurationSeconds: inputMode === 'voice' && finalRecordingSeconds > 0 ? finalRecordingSeconds : undefined,
     };
 
     setIsSubmitting(true);
@@ -225,6 +254,13 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
     }, 1600);
 
     setTimeout(() => {
+      console.log('[Runtime Trace 1 - CitizenVoicePage: before onSubmit]', {
+        submissionId: submission.id,
+        status: 'DISPATCHING_SUBMISSION',
+        text: submission.text,
+        category: submission.category,
+        district: submission.location.districtName,
+      });
       if (onSubmitSubmission) {
         onSubmitSubmission(submission);
       }
@@ -234,7 +270,6 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
   };
 
   const formatTimer = (sec: number) => {
-    const mins = Math.floor(sec / 60);
     const remainingSecs = sec % 60;
     return `00:${remainingSecs < 10 ? '0' : ''}${remainingSecs} / 01:00`;
   };
@@ -274,7 +309,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
         </p>
         <div className="inline-flex p-1 bg-stone-100/90 rounded-full border border-stone-200 shadow-inner" role="group">
           <button
-            onClick={() => setSelectedLanguage('bn')}
+            onClick={() => handleLanguageSelect('bn')}
             className={`px-5 py-1.5 rounded-full text-sm font-medium transition cursor-pointer flex items-center gap-1.5 ${
               selectedLanguage === 'bn'
                 ? 'bg-[#111315] text-white shadow-sm font-semibold'
@@ -294,7 +329,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
             বাংলা
           </button>
           <button
-            onClick={() => setSelectedLanguage('hi')}
+            onClick={() => handleLanguageSelect('hi')}
             className={`px-5 py-1.5 rounded-full text-sm font-medium transition cursor-pointer flex items-center gap-1.5 ${
               selectedLanguage === 'hi'
                 ? 'bg-[#111315] text-white shadow-sm font-semibold'
@@ -306,7 +341,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
               <svg className="w-3.5 h-3.5 text-[#E06D28]" fill="currentColor" viewBox="0 0 20 20">
                 <path
                   clipRule="evenodd"
-                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414 0z"
+                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
                   fillRule="evenodd"
                 ></path>
               </svg>
@@ -314,7 +349,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
             हिन्दी
           </button>
           <button
-            onClick={() => setSelectedLanguage('en')}
+            onClick={() => handleLanguageSelect('en')}
             className={`px-5 py-1.5 rounded-full text-sm font-medium transition cursor-pointer flex items-center gap-1.5 ${
               selectedLanguage === 'en'
                 ? 'bg-[#111315] text-white shadow-sm font-semibold'
@@ -326,7 +361,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
               <svg className="w-3.5 h-3.5 text-[#E06D28]" fill="currentColor" viewBox="0 0 20 20">
                 <path
                   clipRule="evenodd"
-                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414 0z"
+                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
                   fillRule="evenodd"
                 ></path>
               </svg>
@@ -350,14 +385,30 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
           </p>
         </div>
 
-        {/* Voice Recording Simulation Box */}
+        {/* Voice Recording Box */}
         <div className="bg-stone-50 border border-stone-200 rounded-2xl p-6 sm:p-8 text-center relative overflow-hidden mb-8">
           {/* Top Status Bar in Voice Area */}
           <div className="flex items-center justify-between mb-6 text-xs font-mono">
             <div className="inline-flex items-center gap-2 text-stone-600 bg-white px-3 py-1 rounded-full border border-stone-200 shadow-2xs">
-              <span className={`w-2 h-2 rounded-full ${isRecording ? 'bg-emerald-500 animate-pulse' : 'bg-stone-400'}`}></span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isRecording
+                    ? 'bg-red-500 animate-ping'
+                    : isRequestingPermission
+                    ? 'bg-amber-400 animate-pulse'
+                    : seconds > 0
+                    ? 'bg-emerald-500'
+                    : 'bg-stone-400'
+                }`}
+              ></span>
               <span>
-                {isRecording ? 'Voice Ingestion Live' : (seconds > 0 ? 'Audio Recorded' : 'Ready to Record')}
+                {isRequestingPermission
+                  ? 'Requesting Microphone Access...'
+                  : isRecording
+                  ? 'Microphone Ingestion Live'
+                  : seconds > 0
+                  ? `Audio Captured (${seconds}s)`
+                  : 'Ready to Record'}
               </span>
             </div>
             <div className="text-stone-700 font-semibold px-2.5 py-1 bg-white rounded-md border border-stone-200">
@@ -369,45 +420,107 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
           <div className="flex flex-col items-center justify-center my-4">
             <div className="relative group">
               {isRecording && (
-                <div className="absolute -inset-3 bg-orange-100 rounded-full blur-md opacity-70 group-hover:opacity-100 transition duration-300"></div>
+                <div className="absolute -inset-3 bg-red-100 rounded-full blur-md opacity-80 animate-pulse"></div>
+              )}
+              {isRequestingPermission && (
+                <div className="absolute -inset-3 bg-amber-100 rounded-full blur-md opacity-80 animate-pulse"></div>
               )}
               <button
-                aria-label="Microphone recording button"
+                aria-label={isRecording ? 'Stop recording' : 'Start microphone recording'}
                 onClick={handleMicToggle}
-                className="relative w-20 h-20 rounded-full bg-gradient-to-tr from-[#E06D28] to-orange-500 text-white flex items-center justify-center shadow-lg transform active:scale-95 transition-all focus:outline-none focus:ring-4 focus:ring-orange-200 cursor-pointer"
+                disabled={isRequestingPermission}
+                className={`relative w-20 h-20 rounded-full text-white flex items-center justify-center shadow-lg transform active:scale-95 transition-all focus:outline-none cursor-pointer ${
+                  isRecording
+                    ? 'bg-gradient-to-tr from-red-600 to-rose-500 ring-4 ring-red-200'
+                    : isRequestingPermission
+                    ? 'bg-amber-500 ring-4 ring-amber-200 cursor-wait'
+                    : 'bg-gradient-to-tr from-[#E06D28] to-orange-500 hover:shadow-xl focus:ring-4 focus:ring-orange-200'
+                }`}
                 type="button"
               >
-                <svg className="w-9 h-9" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path
-                    d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  ></path>
-                </svg>
+                {isRecording ? (
+                  /* Square stop icon when recording */
+                  <svg className="w-8 h-8 fill-current" viewBox="0 0 24 24">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                ) : isRequestingPermission ? (
+                  /* Spinner while awaiting permission */
+                  <svg className="w-8 h-8 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                ) : (
+                  /* Mic icon when idle */
+                  <svg className="w-9 h-9" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path
+                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    ></path>
+                  </svg>
+                )}
               </button>
             </div>
 
             <p className="mt-4 font-semibold text-stone-800 text-sm tracking-wide">
-              {isRecording ? 'Listening...' : (seconds > 0 ? 'Tap mic to resume recording' : 'Tap mic to speak')}
+              {isRequestingPermission
+                ? 'Allow microphone permission in your browser prompt...'
+                : isRecording
+                ? 'Listening... Tap red button to stop'
+                : seconds > 0
+                ? 'Tap mic to record new audio'
+                : 'Tap mic to speak'}
             </p>
 
-            {/* Waveform visualizer simulation */}
+            {/* Waveform visualizer indicator */}
             <div aria-label="Audio waveform indicator" className="flex items-center gap-1.5 h-8 mt-2">
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-[#E06D28]' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-orange-400' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-[#E06D28]' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-amber-500' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-[#E06D28]' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-orange-400' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-[#E06D28]' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-amber-500' : 'bg-stone-300'} rounded-full`}></span>
-              <span className={`wave-bar w-1 ${isRecording ? 'bg-[#E06D28]' : 'bg-stone-300'} rounded-full`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-red-500' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-orange-400' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-[#E06D28]' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-amber-500' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-red-500' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-orange-400' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-[#E06D28]' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-amber-500' : 'h-1.5 bg-stone-300'}`}></span>
+              <span className={`w-1 rounded-full ${isRecording ? 'wave-bar bg-red-500' : 'h-1.5 bg-stone-300'}`}></span>
             </div>
           </div>
 
           <p className="text-xs text-stone-500 max-w-md mx-auto mt-4">
-            Tap to speak. You can speak naturally in your selected language. Audio is transcribed and scrubbed of personal identifiers.
+            Tap to speak in <span className="font-semibold text-stone-700">{selectedLanguage === 'bn' ? 'বাংলা' : selectedLanguage === 'hi' ? 'हिन्दी' : 'English'}</span>. Audio is processed locally in browser and scrubbed of personal identifiers.
           </p>
+
+          {/* Speech Error Notice */}
+          {speechError && (
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-start justify-between gap-2 text-left">
+              <div className="flex items-start gap-2">
+                <span className="material-symbols-outlined text-base text-red-500 shrink-0 mt-0.5">error</span>
+                <span>{speechError}</span>
+              </div>
+              <button
+                onClick={clearSpeechError}
+                className="text-red-500 hover:text-red-700 font-bold ml-2 cursor-pointer"
+                type="button"
+                aria-label="Dismiss error"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* SpeechRecognition Limitation / Unsupported Notice */}
+          {!isSpeechRecognitionSupported && isVoiceSupported && (
+            <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2 text-left">
+              <span className="material-symbols-outlined text-base text-amber-600 shrink-0 mt-0.5">info</span>
+              <span>
+                Speech-to-text transcription is not natively supported in this browser. Microphone audio recording remains active, and you can type your description directly below.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Divider: Or Type */}
@@ -416,7 +529,7 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
             <div className="w-full border-t border-stone-200"></div>
           </div>
           <div className="relative flex justify-center text-xs uppercase font-mono tracking-widest text-stone-600">
-            <span className="bg-white px-4">or type your experience</span>
+            <span className="bg-white px-4">or edit / type your experience</span>
           </div>
         </div>
 
@@ -451,7 +564,9 @@ export const CitizenVoicePage: React.FC<CitizenVoicePageProps> = ({
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
                 </svg>
-                {inputMode === 'voice' && seconds > 0 ? 'Audio note transcribed' : 'Written text entry'}
+                {inputMode === 'voice' && seconds > 0
+                  ? `Audio note transcribed (${seconds}s)`
+                  : 'Written text entry'}
               </span>
               <span className={inputText.length > 500 ? 'text-red-600 font-bold' : 'text-stone-400'}>
                 {inputText.length} / 500 characters
