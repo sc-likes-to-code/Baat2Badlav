@@ -16,6 +16,7 @@ import {
   getInfrastructureProfile,
   getDemographicProfile,
   getInvestmentProfile,
+  hasContextProfile,
 } from '../data/syntheticDevelopmentContext';
 
 /**
@@ -146,6 +147,10 @@ export function calculateDevelopmentGaps(hotspots: DemandHotspot[]): Development
 
   for (const hotspot of hotspots) {
     const districtId = hotspot.districtId.toLowerCase();
+    if (!hasContextProfile(districtId)) {
+      // Gracefully exclude from context-dependent gap calculations when baseline contextual dataset is absent
+      continue;
+    }
     const infraProfile = getInfrastructureProfile(districtId, hotspot.stateId, hotspot.district);
     const demoProfile = getDemographicProfile(districtId);
     const investProfile = getInvestmentProfile(districtId);

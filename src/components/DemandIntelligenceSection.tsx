@@ -4,7 +4,12 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { CivicCategory, CitizenSubmission, CitizenAIInterpretation } from '../types/citizen';
+import {
+  CivicCategory,
+  CitizenSubmission,
+  CitizenAIInterpretation,
+  LiveCitizenRecord,
+} from '../types/citizen';
 import { DemandCluster, DemandHotspot } from '../types/demand';
 import { DevelopmentGap, GapLevel } from '../types/development';
 import { PriorityAssessment, PriorityBand } from '../types/priority';
@@ -27,6 +32,7 @@ import { SYNTHETIC_CITIZEN_REPORTS } from '../data/syntheticCitizenReports';
 import { PROTOTYPE_STATES } from '../data/locations';
 
 interface DemandIntelligenceSectionProps {
+  liveSubmissions?: LiveCitizenRecord[];
   liveSubmission?: CitizenSubmission | null;
   liveInterpretation?: CitizenAIInterpretation | null;
   onNavigate?: (path: string) => void;
@@ -50,6 +56,7 @@ const PRIORITY_BANDS: PriorityBand[] = [
 ];
 
 export const DemandIntelligenceSection: React.FC<DemandIntelligenceSectionProps> = ({
+  liveSubmissions,
   liveSubmission,
   liveInterpretation,
   onNavigate,
@@ -70,22 +77,104 @@ export const DemandIntelligenceSection: React.FC<DemandIntelligenceSectionProps>
   const [implementationEffectiveness, setImplementationEffectiveness] = useState<number>(75);
   const [activePreset, setActivePreset] = useState<'conservative' | 'balanced' | 'highCoverage' | 'custom'>('balanced');
 
-  // Combine synthetic dataset with any current live user submission & interpretation
-  const allReports: SubmissionWithInterpretation[] = useMemo(() => {
-    const records = [...SYNTHETIC_CITIZEN_REPORTS];
-    if (liveSubmission && liveInterpretation) {
-      records.unshift({
+  // 1. Direct session live list strictly from liveSubmissions (deduplicated by id, immune to filters)
+  const sessionLiveList: LiveCitizenRecord[] = useMemo(() => {
+    const listMap = new Map<string, LiveCitizenRecord>();
+    const syntheticIdSet = new Set(SYNTHETIC_CITIZEN_REPORTS.map((r) => r.submission.id));
+
+    if (liveSubmissions && liveSubmissions.length > 0) {
+      for (const item of liveSubmissions) {
+        if (item && item.submission && !syntheticIdSet.has(item.submission.id)) {
+          listMap.set(item.submission.id, item);
+        }
+      }
+    }
+    if (liveSubmission && !syntheticIdSet.has(liveSubmission.id) && !listMap.has(liveSubmission.id)) {
+      listMap.set(liveSubmission.id, {
         submission: liveSubmission,
-        interpretation: liveInterpretation,
+        interpretation: liveInterpretation || null,
+        status: liveInterpretation ? 'INTERPRETED' : 'PENDING_INTERPRETATION',
       });
     }
-    return records;
-  }, [liveSubmission, liveInterpretation]);
 
-  // 1. Compute deterministic clusters (Stage 3)
+    const liveArr = Array.from(listMap.values());
+
+    console.log('[Runtime Trace 6 - DemandIntelligenceSection: sessionLiveList]', {
+      liveSubmissionsPropsCount: liveSubmissions?.length || 0,
+      sessionLiveCount: liveArr.length,
+      sessionLiveList: liveArr.map((r) => ({
+        id: r.submission.id,
+        status: r.status,
+        hasInterpretation: !!r.interpretation,
+        district: r.submission.location.districtName,
+        category: r.submission.category,
+        text: r.submission.text,
+      })),
+    });
+
+    return liveArr;
+  }, [liveSubmissions, liveSubmission, liveInterpretation]);
+
+  // 2. All citizen reports (synthetic + live), deduplicated by submission ID
+  const allCitizenReports: CitizenSubmission[] = useMemo(() => {
+    const reportMap = new Map<string, CitizenSubmission>();
+    for (const item of SYNTHETIC_CITIZEN_REPORTS) {
+      reportMap.set(item.submission.id, item.submission);
+    }
+    for (const item of sessionLiveList) {
+      reportMap.set(item.submission.id, item.submission);
+    }
+    return Array.from(reportMap.values());
+  }, [sessionLiveList]);
+
+  // 3. Track explicit live counts and interpretation states
+  const liveStats = useMemo(() => {
+    const totalLive = sessionLiveList.length;
+    const interpretedLive = sessionLiveList.filter((r) => r.interpretation !== null && r.status === 'INTERPRETED').length;
+    const pendingLive = sessionLiveList.filter((r) => r.status === 'PENDING_INTERPRETATION').length;
+    const failedLive = sessionLiveList.filter((r) => r.status === 'FAILED').length;
+
+    return { totalLive, interpretedLive, pendingLive, failedLive };
+  }, [sessionLiveList]);
+
+  // 4. ONLY submissions with a real CitizenAIInterpretation participate in downstream analytics
+  const interpretedReports: SubmissionWithInterpretation[] = useMemo(() => {
+    const recordsMap = new Map<string, SubmissionWithInterpretation>();
+    
+    // Seed with synthetic reports (all have verified synthetic interpretations)
+    for (const item of SYNTHETIC_CITIZEN_REPORTS) {
+      recordsMap.set(item.submission.id, item);
+    }
+
+    // Merge ONLY live submissions that have a real, verified CitizenAIInterpretation
+    for (const item of sessionLiveList) {
+      if (item.interpretation && item.status === 'INTERPRETED') {
+        recordsMap.set(item.submission.id, {
+          submission: item.submission,
+          interpretation: item.interpretation,
+        });
+      }
+    }
+
+    const syntheticItems: SubmissionWithInterpretation[] = [];
+    const liveItems: SubmissionWithInterpretation[] = [];
+    const syntheticIdSet = new Set(SYNTHETIC_CITIZEN_REPORTS.map((r) => r.submission.id));
+
+    for (const [id, item] of recordsMap.entries()) {
+      if (syntheticIdSet.has(id)) {
+        syntheticItems.push(item);
+      } else {
+        liveItems.push(item);
+      }
+    }
+
+    return [...liveItems, ...syntheticItems];
+  }, [sessionLiveList]);
+
+  // 1. Compute deterministic clusters (Stage 3) - strictly using real interpreted reports
   const allClusters: DemandCluster[] = useMemo(() => {
-    return clusterCitizenSubmissions(allReports);
-  }, [allReports]);
+    return clusterCitizenSubmissions(interpretedReports);
+  }, [interpretedReports]);
 
   // 2. Derive demand hotspots (Stage 4)
   const allHotspots: DemandHotspot[] = useMemo(() => {
@@ -255,6 +344,123 @@ export const DemandIntelligenceSection: React.FC<DemandIntelligenceSectionProps>
 
   return (
     <section className="space-y-8" aria-label="Development Intelligence and Impact Simulation">
+      {/* ========================================================================= */}
+      {/* 0. DEDICATED UNCONDITIONAL LIVE CITIZEN INPUT SECTION                     */}
+      {/* ========================================================================= */}
+      <div className="bg-white rounded-2xl p-5 border border-stone-200/80 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-stone-100 pb-3">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <h2 className="text-sm font-mono uppercase tracking-wider text-stone-900 font-bold">
+              LIVE CITIZEN INPUT
+            </h2>
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono font-bold">
+              {sessionLiveList.length > 0
+                ? `+${sessionLiveList.length} Live Citizen ${sessionLiveList.length === 1 ? 'Voice' : 'Voices'}`
+                : '0 Live Submissions'}
+            </span>
+          </div>
+          <span className="text-[11px] font-mono text-stone-500">
+            Session-level direct live citizen input stream · Unconditionally displayed
+          </span>
+        </div>
+
+        {sessionLiveList.length === 0 ? (
+          <div className="p-4 rounded-xl bg-stone-50 border border-stone-200/70 text-center space-y-1">
+            <p className="text-xs font-medium text-stone-600">
+              No live citizen reports submitted in this session yet.
+            </p>
+            <p className="text-[11px] text-stone-400 font-mono">
+              Share a community need via Voice or Text to see it immediately appear here.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {sessionLiveList.map((liveRecord, idx) => {
+              const { submission, interpretation, status } = liveRecord;
+              const isInterpreted = status === 'INTERPRETED' && !!interpretation;
+              const isFailed = status === 'FAILED';
+
+              return (
+                <div
+                  key={submission.id || `live-${idx}`}
+                  className="p-4 rounded-xl bg-[#FAF9F5] border border-stone-200/80 shadow-2xs space-y-2.5 transition-all"
+                >
+                  {/* Card Header: Live Tag, Location, Category, Gemini Status */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="px-2 py-0.5 rounded-md bg-[#0F766E] text-white font-mono font-bold text-[10px] tracking-wide">
+                        [LIVE] #{idx + 1}
+                      </span>
+                      <span className="font-semibold text-stone-900 flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[14px] text-stone-500">location_on</span>
+                        {submission.location.districtName}, {submission.location.stateName}
+                        {submission.location.locality ? ` (${submission.location.locality})` : ''}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-stone-200/70 text-stone-700 font-mono text-[11px]">
+                        {submission.category}
+                      </span>
+                      <span className="text-stone-400 text-[10px] font-mono uppercase">
+                        {submission.language.toUpperCase()} · {submission.inputMode}
+                      </span>
+                    </div>
+
+                    {/* Gemini Status Badge */}
+                    <div className="flex items-center gap-1.5 font-mono text-xs">
+                      {isInterpreted ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[11px]">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                          Gemini: Interpreted
+                        </span>
+                      ) : isFailed ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-100 text-red-700 font-bold text-[11px]">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-600"></span>
+                          Gemini: Failed
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-[11px]">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-600 animate-ping"></span>
+                          Gemini: Pending
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Citizen Text Body */}
+                  <div className="p-3 rounded-lg bg-white border border-stone-200/70 text-xs text-stone-800 font-sans leading-relaxed">
+                    <span className="font-semibold text-stone-500 font-mono text-[10px] block mb-0.5">CITIZEN TESTIMONY:</span>
+                    "{submission.text}"
+                  </div>
+
+                  {/* If interpreted by Gemini, show real AI primary issue & domain tags without fabricating */}
+                  {isInterpreted && interpretation && (
+                    <div className="p-2.5 rounded-lg bg-teal-50/50 border border-teal-200/60 text-xs text-teal-900 font-mono space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[11px] text-[#0F766E]">
+                          Structured AI Issue: {interpretation.primaryIssue}
+                        </span>
+                        <span className="text-[10px] text-teal-700">
+                          Severity: {interpretation.severity} · Urgency: {interpretation.urgency}
+                        </span>
+                      </div>
+                      {interpretation.entitiesOrSignals && interpretation.entitiesOrSignals.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {interpretation.entitiesOrSignals.slice(0, 5).map((sig, sIdx) => (
+                            <span key={sIdx} className="px-1.5 py-0.2 rounded bg-white border border-teal-200 text-[10px] text-teal-800">
+                              {sig}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* 1. Pipeline Flow Ribbon (Visualizing all 9 Stages) */}
       <div className="bg-white rounded-2xl p-4 sm:p-5 border border-stone-200/80 shadow-xs">
         <div className="flex items-center justify-between mb-3">
@@ -265,16 +471,30 @@ export const DemandIntelligenceSection: React.FC<DemandIntelligenceSectionProps>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-2 text-xs font-mono">
           {/* Stage 1 */}
-          <div className="p-2 rounded-xl bg-stone-50 border border-stone-200/70">
-            <span className="text-[9px] text-stone-400 font-bold block">STAGE 1</span>
-            <p className="text-stone-800 font-bold text-xs">{allReports.length} Voices</p>
+          <div className="p-2 rounded-xl bg-stone-50 border border-stone-200/70 relative">
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-stone-400 font-bold block">STAGE 1</span>
+              {liveStats.totalLive > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 text-[8px] font-mono font-bold">
+                  +{liveStats.totalLive} Live
+                </span>
+              )}
+            </div>
+            <p className="text-stone-800 font-bold text-xs">{allCitizenReports.length} Voices</p>
             <p className="text-[10px] text-stone-500 font-sans truncate">Citizen voices</p>
           </div>
 
           {/* Stage 2 */}
-          <div className="p-2 rounded-xl bg-stone-50 border border-stone-200/70">
-            <span className="text-[9px] text-[#0F766E] font-bold block">STAGE 2</span>
-            <p className="text-stone-800 font-bold text-xs">{allReports.length} AI Signals</p>
+          <div className="p-2 rounded-xl bg-stone-50 border border-stone-200/70 relative">
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-[#0F766E] font-bold block">STAGE 2</span>
+              {liveStats.interpretedLive > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-teal-100 text-teal-800 text-[8px] font-mono font-bold">
+                  +{liveStats.interpretedLive} Real AI
+                </span>
+              )}
+            </div>
+            <p className="text-stone-800 font-bold text-xs">{interpretedReports.length} AI Signals</p>
             <p className="text-[10px] text-stone-500 font-sans truncate">Domain & severity</p>
           </div>
 
@@ -327,6 +547,32 @@ export const DemandIntelligenceSection: React.FC<DemandIntelligenceSectionProps>
             <p className="text-[10px] text-indigo-700 font-sans truncate font-semibold">Impact model</p>
           </div>
         </div>
+
+        {/* Live Citizen Ingestion Status Banner */}
+        {liveStats.totalLive > 0 && (
+          <div className="mt-4 p-3.5 rounded-xl bg-emerald-50/90 border border-emerald-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-2xs">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="font-bold text-emerald-900 font-mono text-xs sm:text-sm">
+                +{liveStats.totalLive} Live Citizen {liveStats.totalLive === 1 ? 'Voice' : 'Voices'} Active in Session
+              </span>
+              <span className="text-emerald-700 font-sans">
+                ({liveStats.interpretedLive} AI interpreted
+                {liveStats.pendingLive > 0 ? `, ${liveStats.pendingLive} awaiting interpretation` : ''}
+                {liveStats.failedLive > 0 ? `, ${liveStats.failedLive} failed` : ''})
+              </span>
+            </div>
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <button
+                onClick={() => setActiveTab('clusters')}
+                className="px-2.5 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-800 font-bold hover:bg-emerald-100 transition cursor-pointer"
+                type="button"
+              >
+                View Demand Clusters →
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 2. Top Metric Strip */}
@@ -543,14 +789,15 @@ export const DemandIntelligenceSection: React.FC<DemandIntelligenceSectionProps>
               <span className="text-[10px] font-mono uppercase tracking-wider text-[#444653] font-semibold">
                 Citizen Demand Input
               </span>
-              {liveSubmission && (
+              {liveStats.totalLive > 0 && (
                 <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-mono font-bold">
-                  +1 Live Voice
+                  +{liveStats.totalLive} Live {liveStats.totalLive === 1 ? 'Voice' : 'Voices'}
+                  {liveStats.pendingLive > 0 && ` (${liveStats.pendingLive} pending)`}
                 </span>
               )}
             </div>
             <div className="text-3xl font-mono font-bold text-[#033aaf] tracking-tight">
-              {allReports.length} <span className="text-xs font-normal text-stone-500">Voices</span>
+              {allCitizenReports.length} <span className="text-xs font-normal text-stone-500">Voices</span>
             </div>
             <p className="text-xs text-stone-500">Directly driving localized demand signals</p>
           </div>
@@ -1754,7 +2001,7 @@ export const DemandIntelligenceSection: React.FC<DemandIntelligenceSectionProps>
             <div className="grid grid-cols-1 gap-4">
               {filteredClusters.map((cluster) => {
                 const isExpanded = expandedClusterId === cluster.id;
-                const memberReports = allReports.filter((r) =>
+                const memberReports = interpretedReports.filter((r) =>
                   cluster.memberReportIds.includes(r.submission.id)
                 );
 

@@ -1,17 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { HOTSPOTS, Hotspot } from '../data/mockData';
 import { SPATIAL_CORRIDORS } from '../utils/geoProjection';
-import { CitizenSubmission, CitizenAIInterpretation } from '../types/citizen';
+import { CitizenSubmission, CitizenAIInterpretation, LiveCitizenRecord } from '../types/citizen';
 import { DemandIntelligenceSection } from '../components/DemandIntelligenceSection';
 
 interface DashboardPageProps {
   onNavigate: (path: string) => void;
+  liveSubmissions?: LiveCitizenRecord[];
   liveSubmission?: CitizenSubmission | null;
   liveInterpretation?: CitizenAIInterpretation | null;
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({
   onNavigate,
+  liveSubmissions,
   liveSubmission,
   liveInterpretation,
 }) => {
@@ -289,13 +291,22 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         </div>
 
         {/* VIEW 1: CITIZEN DEMAND CLUSTERS & DEMAND HOTSPOTS (UPDATE 04 CORE) */}
-        {dashboardView === 'demand-intelligence' && (
-          <DemandIntelligenceSection
-            liveSubmission={liveSubmission}
-            liveInterpretation={liveInterpretation}
-            onNavigate={onNavigate}
-          />
-        )}
+        {dashboardView === 'demand-intelligence' && (() => {
+          console.log('[Runtime Trace 5 - DashboardPage: rendering DemandIntelligenceSection]', {
+            liveCount: liveSubmissions?.length || 0,
+            liveIds: liveSubmissions?.map((s) => s.submission.id) || [],
+            liveSubmissions,
+          });
+
+          return (
+            <DemandIntelligenceSection
+              liveSubmissions={liveSubmissions}
+              liveSubmission={liveSubmission}
+              liveInterpretation={liveInterpretation}
+              onNavigate={onNavigate}
+            />
+          );
+        })()}
 
         {/* VIEW 2: SPATIAL ATLAS (EXISTING GEOSPATIAL VECTOR VIEW) */}
         {dashboardView === 'spatial-atlas' && (

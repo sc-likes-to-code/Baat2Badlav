@@ -275,6 +275,18 @@ export const SYNTHETIC_INVESTMENT_PROFILES: Record<string, InvestmentProfile> = 
 };
 
 /**
+ * Checks if explicit synthetic contextual datasets exist for a given district.
+ */
+export function hasContextProfile(districtId: string): boolean {
+  const key = districtId.toLowerCase();
+  return (
+    key in SYNTHETIC_INFRASTRUCTURE_PROFILES ||
+    key in SYNTHETIC_DEMOGRAPHIC_PROFILES ||
+    key in SYNTHETIC_INVESTMENT_PROFILES
+  );
+}
+
+/**
  * Fallback helpers for districts without an explicit handcrafted profile
  */
 export function getInfrastructureProfile(districtId: string, stateId: string = 'WB', districtName: string = 'District'): InfrastructureProfile {

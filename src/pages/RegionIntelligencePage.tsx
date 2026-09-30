@@ -4,7 +4,12 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { CivicCategory, CitizenSubmission, CitizenAIInterpretation } from '../types/citizen';
+import {
+  CivicCategory,
+  CitizenSubmission,
+  CitizenAIInterpretation,
+  LiveCitizenRecord,
+} from '../types/citizen';
 import { DemandHotspot } from '../types/demand';
 import { DevelopmentGap } from '../types/development';
 import { PriorityAssessment } from '../types/priority';
@@ -22,7 +27,11 @@ import {
   getStateName,
 } from '../data/locations';
 
-import { clusterCitizenSubmissions, deriveDemandHotspots, SubmissionWithInterpretation } from '../services/clusteringService';
+import {
+  clusterCitizenSubmissions,
+  deriveDemandHotspots,
+  SubmissionWithInterpretation,
+} from '../services/clusteringService';
 import { calculateDevelopmentGaps } from '../services/developmentGapService';
 import { calculatePriorityAssessments } from '../services/priorityService';
 import { generateCandidateProjects } from '../services/projectService';
@@ -31,6 +40,7 @@ import { simulateImpact, PRESET_SCENARIOS } from '../services/impactSimulationSe
 interface RegionIntelligencePageProps {
   onNavigate: (path: string) => void;
   currentPath?: string;
+  liveSubmissions?: LiveCitizenRecord[];
   liveSubmission?: CitizenSubmission | null;
   liveInterpretation?: CitizenAIInterpretation | null;
 }
@@ -41,6 +51,7 @@ const PROTOTYPE_DISTRICT_KEYS = ['nadia', 'murshidabad', 'kalahandi', 'gaya', 'm
 export const RegionIntelligencePage: React.FC<RegionIntelligencePageProps> = ({
   onNavigate,
   currentPath = '/dashboard/region/nadia',
+  liveSubmissions,
   liveSubmission,
   liveInterpretation,
 }) => {
@@ -93,17 +104,45 @@ export const RegionIntelligencePage: React.FC<RegionIntelligencePageProps> = ({
     };
   }, [selectedDistrictId]);
 
-  // 6. Assemble all reports (synthetic + live)
+  // 6. Assemble verified interpreted reports (synthetic + verified real live submissions)
   const allReports: SubmissionWithInterpretation[] = useMemo(() => {
-    const records = [...SYNTHETIC_CITIZEN_REPORTS];
-    if (liveSubmission && liveInterpretation) {
-      records.push({
+    const reportMap = new Map<string, SubmissionWithInterpretation>();
+    for (const item of SYNTHETIC_CITIZEN_REPORTS) {
+      reportMap.set(item.submission.id, item);
+    }
+
+    if (liveSubmissions && liveSubmissions.length > 0) {
+      for (const item of liveSubmissions) {
+        if (item && item.submission && item.interpretation && item.status === 'INTERPRETED') {
+          reportMap.set(item.submission.id, {
+            submission: item.submission,
+            interpretation: item.interpretation,
+          });
+        }
+      }
+    }
+
+    if (liveSubmission && liveInterpretation && !reportMap.has(liveSubmission.id)) {
+      reportMap.set(liveSubmission.id, {
         submission: liveSubmission,
         interpretation: liveInterpretation,
       });
     }
-    return records;
-  }, [liveSubmission, liveInterpretation]);
+
+    const syntheticItems: SubmissionWithInterpretation[] = [];
+    const liveItems: SubmissionWithInterpretation[] = [];
+    const syntheticIdSet = new Set(SYNTHETIC_CITIZEN_REPORTS.map((r) => r.submission.id));
+
+    for (const [id, item] of reportMap.entries()) {
+      if (syntheticIdSet.has(id)) {
+        syntheticItems.push(item);
+      } else {
+        liveItems.push(item);
+      }
+    }
+
+    return [...liveItems, ...syntheticItems];
+  }, [liveSubmissions, liveSubmission, liveInterpretation]);
 
   // 7. Execute deterministic downstream pipeline
   const pipelineData = useMemo(() => {
