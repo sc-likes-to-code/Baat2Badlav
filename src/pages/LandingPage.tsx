@@ -6,7 +6,6 @@ interface LandingPageProps {
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
-  const [activeStep, setActiveStep] = useState<number>(0);
   const [playingSample, setPlayingSample] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -243,16 +242,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
           {/* Interactive Pipeline Steps */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {pipelineSteps.map((step, idx) => (
+            {pipelineSteps.map((step) => (
               <div
                 key={step.id}
                 onClick={() => onNavigate(step.path)}
-                className={`group cursor-pointer rounded-2xl p-6 sm:p-7 border transition-all duration-200 relative flex flex-col justify-between ${
-                  activeStep === idx
-                    ? 'bg-white border-[#1A6F62] shadow-md ring-1 ring-[#1A6F62]'
-                    : 'bg-white/80 border-[#E3DECE] hover:border-[#B5CECE] hover:bg-white shadow-xs'
-                }`}
-                onMouseEnter={() => setActiveStep(idx)}
+                className="group cursor-pointer rounded-2xl p-6 sm:p-7 border border-[#E3DECE] bg-white/80 hover:bg-white hover:border-[#1A6F62] hover:shadow-md hover:ring-1 hover:ring-[#1A6F62] transition-all duration-200 relative flex flex-col justify-between"
               >
                 <div>
                   <div className="flex items-center justify-between mb-4">
