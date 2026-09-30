@@ -236,21 +236,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
                 <div className="pt-4 border-t border-[#EAE5D7] flex items-center justify-between text-xs">
                   <span className="font-mono font-medium text-[#2E4550]">{step.metric}</span>
-                  <span className="inline-flex items-center text-[#1A6F62] font-bold group-hover:translate-x-1 transition-transform">
-                    View Demo →
-                  </span>
                 </div>
               </div>
             ))}
-          </div>
-
-          <div className="mt-12 text-center">
-            <button
-              onClick={() => onNavigate('/citizen/result')}
-              className="inline-flex items-center gap-2 text-sm font-bold text-[#1A6F62] hover:text-[#13544A] underline underline-offset-4"
-            >
-              See Live Gemini Interpretation Sample (Screen 3) →
-            </button>
           </div>
         </div>
       </section>
