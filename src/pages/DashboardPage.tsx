@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { HOTSPOTS, Hotspot } from '../data/mockData';
 import { SPATIAL_CORRIDORS } from '../utils/geoProjection';
 import { CitizenSubmission, CitizenAIInterpretation } from '../types/citizen';
@@ -19,7 +19,174 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const [selectedHotspot, setSelectedHotspot] = useState<Hotspot>(HOTSPOTS[0]);
   const [selectedSectorFilter, setSelectedSectorFilter] = useState<string>('All Sectors');
   const [activeLayer, setActiveLayer] = useState<'demand' | 'infra' | 'gap'>('gap');
-  const [zoomLevel, setZoomLevel] = useState<number>(1);
+
+  // Unified Map Viewport State (Single Source of Truth for all navigation methods)
+  const [mapViewport, setMapViewport] = useState<{ x: number; y: number; zoom: number }>({
+    x: 0,
+    y: 0,
+    zoom: 1,
+  });
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const dragStartRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number }>({
+    startX: 0,
+    startY: 0,
+    initialX: 0,
+    initialY: 0,
+  });
+  const hasDraggedRef = useRef<boolean>(false);
+
+  // Zoom & Pan Constraints
+  const MIN_ZOOM = 0.8;
+  const MAX_ZOOM = 3.5;
+
+  const clampPan = (x: number, y: number, zoom: number) => {
+    const maxPanX = Math.max(0, (zoom - 0.75) * 350);
+    const maxPanY = Math.max(0, (zoom - 0.75) * 450);
+    return {
+      x: Math.max(-maxPanX, Math.min(maxPanX, x)),
+      y: Math.max(-maxPanY, Math.min(maxPanY, y)),
+    };
+  };
+
+  const handleZoomIn = () => {
+    setMapViewport((prev) => {
+      const nextZoom = Math.min(MAX_ZOOM, Math.round((prev.zoom + 0.25) * 100) / 100);
+      const clamped = clampPan(prev.x, prev.y, nextZoom);
+      return { ...prev, zoom: nextZoom, ...clamped };
+    });
+  };
+
+  const handleZoomOut = () => {
+    setMapViewport((prev) => {
+      const nextZoom = Math.max(MIN_ZOOM, Math.round((prev.zoom - 0.25) * 100) / 100);
+      const clamped = clampPan(prev.x, prev.y, nextZoom);
+      return { ...prev, zoom: nextZoom, ...clamped };
+    });
+  };
+
+  const handleResetViewport = () => {
+    setMapViewport({ x: 0, y: 0, zoom: 1 });
+    setSelectedHotspot(HOTSPOTS[0]);
+  };
+
+  // Mouse Drag Handlers
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return; // only left-click
+    setIsDragging(true);
+    hasDraggedRef.current = false;
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initialX: mapViewport.x,
+      initialY: mapViewport.y,
+    };
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    const dx = e.clientX - dragStartRef.current.startX;
+    const dy = e.clientY - dragStartRef.current.startY;
+    if (Math.hypot(dx, dy) > 4) {
+      hasDraggedRef.current = true;
+    }
+    const clamped = clampPan(
+      dragStartRef.current.initialX + dx,
+      dragStartRef.current.initialY + dy,
+      mapViewport.zoom
+    );
+    setMapViewport((prev) => ({
+      ...prev,
+      x: clamped.x,
+      y: clamped.y,
+    }));
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  // Touch Handlers (Mobile / Tablet pan support)
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      setIsDragging(true);
+      hasDraggedRef.current = false;
+      dragStartRef.current = {
+        startX: e.touches[0].clientX,
+        startY: e.touches[0].clientY,
+        initialX: mapViewport.x,
+        initialY: mapViewport.y,
+      };
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isDragging || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - dragStartRef.current.startX;
+    const dy = e.touches[0].clientY - dragStartRef.current.startY;
+    if (Math.hypot(dx, dy) > 4) {
+      hasDraggedRef.current = true;
+    }
+    const clamped = clampPan(
+      dragStartRef.current.initialX + dx,
+      dragStartRef.current.initialY + dy,
+      mapViewport.zoom
+    );
+    setMapViewport((prev) => ({
+      ...prev,
+      x: clamped.x,
+      y: clamped.y,
+    }));
+  };
+
+  const handleTouchEnd = () => {
+    setIsDragging(false);
+  };
+
+  // Global mouse up / touch end listener
+  useEffect(() => {
+    const onGlobalUp = () => setIsDragging(false);
+    window.addEventListener('mouseup', onGlobalUp);
+    window.addEventListener('touchend', onGlobalUp);
+    return () => {
+      window.removeEventListener('mouseup', onGlobalUp);
+      window.removeEventListener('touchend', onGlobalUp);
+    };
+  }, []);
+
+  // Wheel zoom attached with { passive: false } to intercept scroll over the map
+  useEffect(() => {
+    if (dashboardView !== 'spatial-atlas') return;
+    const container = mapContainerRef.current;
+    if (!container) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      // Smooth proportional zoom step
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+      setMapViewport((prev) => {
+        const rawZoom = prev.zoom * zoomFactor;
+        const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(rawZoom * 100) / 100));
+        if (nextZoom === prev.zoom) return prev;
+
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left - rect.width / 2;
+        const mouseY = e.clientY - rect.top - rect.height / 2;
+
+        const zoomRatio = nextZoom / prev.zoom;
+        const rawX = mouseX - (mouseX - prev.x) * zoomRatio;
+        const rawY = mouseY - (mouseY - prev.y) * zoomRatio;
+
+        const clamped = clampPan(rawX, rawY, nextZoom);
+        return { x: clamped.x, y: clamped.y, zoom: nextZoom };
+      });
+    };
+
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      container.removeEventListener('wheel', onWheel);
+    };
+  }, [dashboardView]);
 
   const filteredHotspots =
     selectedSectorFilter === 'All Sectors'
@@ -320,8 +487,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               </div>
             </div>
 
-            {/* Map Canvas with SVG rendering */}
-            <div className="relative flex-1 w-full bg-[#f4f3ef] overflow-hidden flex items-center justify-center select-none">
+            {/* Map Canvas with SVG rendering and Unified Viewport Navigation */}
+            <div
+              ref={mapContainerRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              className={`relative flex-1 w-full bg-[#f4f3ef] overflow-hidden flex items-center justify-center select-none ${
+                isDragging ? 'cursor-grabbing' : 'cursor-grab'
+              }`}
+            >
               {/* Background Matrix Grid */}
               <div
                 className="absolute inset-0 opacity-20 pointer-events-none"
@@ -333,9 +511,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
               {/* Real Geographic Map of India with Analytical Overlays */}
               <svg
-                className="w-full h-full max-h-[580px] object-contain drop-shadow-sm transition-transform duration-500 ease-out"
+                className="w-full h-full max-h-[580px] object-contain drop-shadow-sm"
                 viewBox="0 0 884 1024"
-                style={{ transform: `scale(${zoomLevel})` }}
               >
                 <defs>
                   <radialGradient cx="50%" cy="50%" id="hotspot-glow-high" r="50%">
@@ -350,132 +527,149 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                   </radialGradient>
                 </defs>
 
-                {/* Base Layer: Verified Geographic India Map Image */}
-                <image
-                  href="/india_map.jpg"
-                  x="0"
-                  y="0"
-                  width="884"
-                  height="1024"
-                  preserveAspectRatio="xMidYMid meet"
-                  opacity="0.95"
-                />
+                {/* Unified Navigable Viewport Layer */}
+                <g
+                  transform={`translate(${mapViewport.x}, ${mapViewport.y}) scale(${mapViewport.zoom})`}
+                  style={{
+                    transformOrigin: '442px 512px',
+                    transition: isDragging ? 'none' : 'transform 0.15s ease-out',
+                  }}
+                >
+                  {/* Base Layer: Verified Geographic India Map Image */}
+                  <image
+                    href="/india_map.jpg"
+                    x="0"
+                    y="0"
+                    width="884"
+                    height="1024"
+                    preserveAspectRatio="xMidYMid meet"
+                    opacity="0.95"
+                  />
 
-                {/* Sub-Regional Analytical Corridors (Connecting Related Clusters) */}
-                {SPATIAL_CORRIDORS.map((corridor) => {
-                  const fromH = filteredHotspots.find((h) => h.id === corridor.fromId) || HOTSPOTS.find((h) => h.id === corridor.fromId);
-                  const toH = filteredHotspots.find((h) => h.id === corridor.toId) || HOTSPOTS.find((h) => h.id === corridor.toId);
-                  if (!fromH || !toH) return null;
+                  {/* Sub-Regional Analytical Corridors (Connecting Related Clusters) */}
+                  {SPATIAL_CORRIDORS.map((corridor) => {
+                    const fromH = filteredHotspots.find((h) => h.id === corridor.fromId) || HOTSPOTS.find((h) => h.id === corridor.fromId);
+                    const toH = filteredHotspots.find((h) => h.id === corridor.toId) || HOTSPOTS.find((h) => h.id === corridor.toId);
+                    if (!fromH || !toH) return null;
 
-                  return (
-                    <g key={corridor.id} className="pointer-events-none">
-                      <line
-                        x1={fromH.coordinates.x}
-                        y1={fromH.coordinates.y}
-                        x2={toH.coordinates.x}
-                        y2={toH.coordinates.y}
-                        stroke="#033aaf"
-                        strokeWidth="2.5"
-                        strokeDasharray="5 5"
-                        strokeOpacity="0.55"
-                        strokeLinecap="round"
-                      />
-                    </g>
-                  );
-                })}
+                    return (
+                      <g key={corridor.id} className="pointer-events-none">
+                        <line
+                          x1={fromH.coordinates.x}
+                          y1={fromH.coordinates.y}
+                          x2={toH.coordinates.x}
+                          y2={toH.coordinates.y}
+                          stroke="#033aaf"
+                          strokeWidth="2.5"
+                          strokeDasharray="5 5"
+                          strokeOpacity="0.55"
+                          strokeLinecap="round"
+                        />
+                      </g>
+                    );
+                  })}
 
-                {/* Interactive Hotspot Nodes (Positioned via Real Geographic Coordinates) */}
-                {filteredHotspots.map((h) => {
-                  const isSelected = selectedHotspot.id === h.id;
-                  const glowId = h.gapScore >= 80 ? 'url(#hotspot-glow-high)' : 'url(#hotspot-glow-amber)';
-                  const dotColor = h.gapScore >= 80 ? '#ba1a1a' : h.gapScore >= 50 ? '#fe843e' : '#006962';
+                  {/* Interactive Hotspot Nodes (Positioned via Real Geographic Coordinates) */}
+                  {filteredHotspots.map((h) => {
+                    const isSelected = selectedHotspot.id === h.id;
+                    const glowId = h.gapScore >= 80 ? 'url(#hotspot-glow-high)' : 'url(#hotspot-glow-amber)';
+                    const dotColor = h.gapScore >= 80 ? '#ba1a1a' : h.gapScore >= 50 ? '#fe843e' : '#006962';
 
-                  // Dynamic tooltip translation to prevent clipping near canvas edges
-                  const tooltipOffsetX = h.coordinates.x > 620 ? -188 : 18;
-                  const tooltipOffsetY = h.coordinates.y < 90 ? 15 : -28;
+                    // Dynamic tooltip translation to prevent clipping near canvas edges
+                    const tooltipOffsetX = h.coordinates.x > 620 ? -188 : 18;
+                    const tooltipOffsetY = h.coordinates.y < 90 ? 15 : -28;
 
-                  return (
-                    <g
-                      key={h.id}
-                      onClick={() => handleSelectHotspot(h)}
-                      className="cursor-pointer group"
-                    >
-                      {isSelected ? (
-                        <>
-                          {/* Concentric sonar pulses */}
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="none" opacity="0.6" r="32" stroke="#ba1a1a" strokeWidth="1.5">
-                            <animate attributeName="r" dur="2.4s" repeatCount="indefinite" values="12;36;42"></animate>
-                            <animate attributeName="opacity" dur="2.4s" repeatCount="indefinite" values="0.85;0.3;0"></animate>
-                          </circle>
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="20"></circle>
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="#ba1a1a" r="8" stroke="#ffffff" strokeWidth="2.5"></circle>
+                    return (
+                      <g
+                        key={h.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!hasDraggedRef.current) {
+                            handleSelectHotspot(h);
+                          }
+                        }}
+                        className="cursor-pointer group"
+                      >
+                        {isSelected ? (
+                          <>
+                            {/* Concentric sonar pulses */}
+                            <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="none" opacity="0.6" r="32" stroke="#ba1a1a" strokeWidth="1.5">
+                              <animate attributeName="r" dur="2.4s" repeatCount="indefinite" values="12;36;42"></animate>
+                              <animate attributeName="opacity" dur="2.4s" repeatCount="indefinite" values="0.85;0.3;0"></animate>
+                            </circle>
+                            <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="20"></circle>
+                            <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="#ba1a1a" r="8" stroke="#ffffff" strokeWidth="2.5"></circle>
 
-                          {/* Active Callout Marker Card */}
-                          <g transform={`translate(${h.coordinates.x + tooltipOffsetX}, ${h.coordinates.y + tooltipOffsetY})`}>
-                            <rect fill="#ffffff" filter="drop-shadow(0 4px 8px rgba(0,0,0,0.18))" height="54" rx="8" width="176" stroke="#d5d5dc"></rect>
-                            <rect fill="#ba1a1a" height="54" rx="2" width="4"></rect>
-                            <text fill="#1a1c1e" fontFamily="Plus Jakarta Sans" fontSize="12" fontWeight="700" x="12" y="18">
-                              {h.name}
+                            {/* Active Callout Marker Card */}
+                            <g transform={`translate(${h.coordinates.x + tooltipOffsetX}, ${h.coordinates.y + tooltipOffsetY})`}>
+                              <rect fill="#ffffff" filter="drop-shadow(0 4px 8px rgba(0,0,0,0.18))" height="54" rx="8" width="176" stroke="#d5d5dc"></rect>
+                              <rect fill="#ba1a1a" height="54" rx="2" width="4"></rect>
+                              <text fill="#1a1c1e" fontFamily="Plus Jakarta Sans" fontSize="12" fontWeight="700" x="12" y="18">
+                                {h.name}
+                              </text>
+                              <text fill="#ba1a1a" fontFamily="JetBrains Mono" fontSize="10" fontWeight="600" x="12" y="33">
+                                Gap Index: {h.gapScore}/100 · {h.state}
+                              </text>
+                              <text fill="#444653" fontFamily="Plus Jakarta Sans" fontSize="9.5" x="12" y="46">
+                                {h.citizenRequests.toLocaleString()} Requests · {h.sector.split(' ')[0]}
+                              </text>
+                            </g>
+                          </>
+                        ) : (
+                          <>
+                            <circle className="animate-pulse" cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="15"></circle>
+                            <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={dotColor} r="5.5" stroke="#ffffff" strokeWidth="1.5"></circle>
+                            <text
+                              fill="#1a1c1e"
+                              fontFamily="Plus Jakarta Sans"
+                              fontSize="11"
+                              fontWeight="700"
+                              textAnchor="middle"
+                              x={h.coordinates.x}
+                              y={h.coordinates.y - 12}
+                              style={{
+                                paintOrder: 'stroke fill',
+                                stroke: '#ffffff',
+                                strokeWidth: '3px',
+                                strokeLinejoin: 'round',
+                              }}
+                            >
+                              {h.district}
                             </text>
-                            <text fill="#ba1a1a" fontFamily="JetBrains Mono" fontSize="10" fontWeight="600" x="12" y="33">
-                              Gap Index: {h.gapScore}/100 · {h.state}
-                            </text>
-                            <text fill="#444653" fontFamily="Plus Jakarta Sans" fontSize="9.5" x="12" y="46">
-                              {h.citizenRequests.toLocaleString()} Requests · {h.sector.split(' ')[0]}
-                            </text>
-                          </g>
-                        </>
-                      ) : (
-                        <>
-                          <circle className="animate-pulse" cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="15"></circle>
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={dotColor} r="5.5" stroke="#ffffff" strokeWidth="1.5"></circle>
-                          <text
-                            fill="#1a1c1e"
-                            fontFamily="Plus Jakarta Sans"
-                            fontSize="11"
-                            fontWeight="700"
-                            textAnchor="middle"
-                            x={h.coordinates.x}
-                            y={h.coordinates.y - 12}
-                            style={{
-                              paintOrder: 'stroke fill',
-                              stroke: '#ffffff',
-                              strokeWidth: '3px',
-                              strokeLinejoin: 'round',
-                            }}
-                          >
-                            {h.district}
-                          </text>
-                        </>
-                      )}
-                    </g>
-                  );
-                })}
+                          </>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
               </svg>
 
               {/* Floating Map Controls */}
-              <div className="absolute right-4 bottom-4 flex flex-col gap-1.5 bg-white p-1.5 rounded-xl shadow-md border border-stone-200 z-20">
+              <div className="absolute right-4 bottom-4 flex flex-col items-center gap-1.5 bg-white p-1.5 rounded-xl shadow-md border border-stone-200 z-20">
                 <button
-                  onClick={() => setZoomLevel((z) => Math.min(z + 0.2, 1.8))}
+                  onClick={handleZoomIn}
                   className="w-8 h-8 rounded-lg flex items-center justify-center text-[#1a1c1e] hover:bg-stone-100 transition-colors cursor-pointer"
-                  title="Zoom in"
+                  title="Zoom in (+)"
+                  type="button"
                 >
                   <span className="material-symbols-outlined text-[18px]">add</span>
                 </button>
+                <span className="text-[10px] font-mono text-[#444653] font-bold py-0.5 select-none">
+                  {Math.round(mapViewport.zoom * 100)}%
+                </span>
                 <button
-                  onClick={() => setZoomLevel((z) => Math.max(z - 0.2, 0.8))}
+                  onClick={handleZoomOut}
                   className="w-8 h-8 rounded-lg flex items-center justify-center text-[#1a1c1e] hover:bg-stone-100 transition-colors cursor-pointer"
-                  title="Zoom out"
+                  title="Zoom out (−)"
+                  type="button"
                 >
                   <span className="material-symbols-outlined text-[18px]">remove</span>
                 </button>
                 <button
-                  onClick={() => {
-                    setZoomLevel(1);
-                    setSelectedHotspot(HOTSPOTS[0]);
-                  }}
+                  onClick={handleResetViewport}
                   className="w-8 h-8 rounded-lg flex items-center justify-center text-[#1a1c1e] hover:bg-stone-100 transition-colors cursor-pointer"
-                  title="Recenter to active hotspot"
+                  title="Recenter map and reset zoom"
+                  type="button"
                 >
                   <span className="material-symbols-outlined text-[18px]">my_location</span>
                 </button>
