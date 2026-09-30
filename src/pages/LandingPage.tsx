@@ -419,7 +419,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               {HOTSPOTS.slice(0, 3).map((spot) => (
                 <div
                   key={spot.id}
-                  onClick={() => onNavigate(spot.id === 'nadia' ? '/dashboard/region/nadia' : '/dashboard')}
+                  onClick={() => onNavigate(`/dashboard/region/${spot.id}`)}
                   className="bg-white/5 border border-white/10 hover:border-[#1A6F62] p-5 rounded-2xl cursor-pointer hover:bg-white/10 transition-all flex flex-col justify-between"
                 >
                   <div>
