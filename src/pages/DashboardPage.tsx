@@ -496,22 +496,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               onTouchStart={handleTouchStart}
               onTouchMove={handleTouchMove}
               onTouchEnd={handleTouchEnd}
-              className={`relative flex-1 w-full bg-[#f4f3ef] overflow-hidden flex items-center justify-center select-none ${
+              className={`relative flex-1 w-full bg-white overflow-hidden flex items-center justify-center select-none ${
                 isDragging ? 'cursor-grabbing' : 'cursor-grab'
               }`}
             >
-              {/* Background Matrix Grid */}
-              <div
-                className="absolute inset-0 opacity-20 pointer-events-none"
-                style={{
-                  backgroundImage: 'radial-gradient(#747685 1px, transparent 1px)',
-                  backgroundSize: '24px 24px',
-                }}
-              ></div>
-
               {/* Real Geographic Map of India with Analytical Overlays */}
               <svg
-                className="w-full h-full max-h-[580px] object-contain drop-shadow-sm"
+                className="w-full h-full max-h-[580px] object-contain"
                 viewBox="0 0 884 1024"
               >
                 <defs>
@@ -535,7 +526,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                     transition: isDragging ? 'none' : 'transform 0.15s ease-out',
                   }}
                 >
-                  {/* Base Layer: Verified Geographic India Map Image */}
+                  {/* Base Layer: Verified Geographic India Map Image (Seamless Pure White Canvas) */}
                   <image
                     href="/india_map.jpg"
                     x="0"
@@ -543,7 +534,6 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                     width="884"
                     height="1024"
                     preserveAspectRatio="xMidYMid meet"
-                    opacity="0.95"
                   />
 
                   {/* Sub-Regional Analytical Corridors (Connecting Related Clusters) */}
