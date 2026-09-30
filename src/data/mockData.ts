@@ -1,3 +1,5 @@
+import { geoToSvgCoordinates, VERIFIED_LOCATIONS } from '../utils/geoProjection';
+
 export interface Hotspot {
   id: string;
   name: string;
@@ -15,7 +17,9 @@ export interface Hotspot {
   investmentCoverage: number;
   urgencyScore: number;
   vulnerabilityScore?: number;
-  coordinates: { x: number; y: number }; // SVG map coordinates
+  latitude: number;
+  longitude: number;
+  coordinates: { x: number; y: number }; // SVG map coordinates derived deterministically from (lat, lon)
   primaryIssue: string;
   trendVelocity: string;
   whyItMatters: string;
@@ -39,7 +43,9 @@ export const HOTSPOTS: Hotspot[] = [
     investmentCoverage: 31,
     urgencyScore: 82,
     vulnerabilityScore: 64,
-    coordinates: { x: 504, y: 285 },
+    latitude: VERIFIED_LOCATIONS.nadia.latitude,
+    longitude: VERIFIED_LOCATIONS.nadia.longitude,
+    coordinates: geoToSvgCoordinates(VERIFIED_LOCATIONS.nadia.latitude, VERIFIED_LOCATIONS.nadia.longitude),
     primaryIssue: 'Monsoon road inundation and physical access severance',
     trendVelocity: '↑ Emerging (+18% MoM)',
     whyItMatters: 'High citizen demand is concentrated across multiple contiguous gram panchayats while PMGSY all-weather road coverage remains 42% below district baseline. Existing public works tenders do not correspond with current seasonal disruption testimony.'
@@ -61,7 +67,9 @@ export const HOTSPOTS: Hotspot[] = [
     investmentCoverage: 33,
     urgencyScore: 85,
     vulnerabilityScore: 72,
-    coordinates: { x: 455, y: 340 },
+    latitude: VERIFIED_LOCATIONS.kalahandi.latitude,
+    longitude: VERIFIED_LOCATIONS.kalahandi.longitude,
+    coordinates: geoToSvgCoordinates(VERIFIED_LOCATIONS.kalahandi.latitude, VERIFIED_LOCATIONS.kalahandi.longitude),
     primaryIssue: 'Salinity intrusion, fluoride contamination & acute pipe pressure drop',
     trendVelocity: '↑ Emerging (+11% MoM)',
     whyItMatters: 'Deep groundwater extraction points have dropped below seasonal recharge thresholds, leading to recurring dry taps across 14 panchayats during summer months.'
@@ -83,10 +91,36 @@ export const HOTSPOTS: Hotspot[] = [
     investmentCoverage: 46,
     urgencyScore: 71,
     vulnerabilityScore: 60,
-    coordinates: { x: 435, y: 235 },
+    latitude: VERIFIED_LOCATIONS.gaya.latitude,
+    longitude: VERIFIED_LOCATIONS.gaya.longitude,
+    coordinates: geoToSvgCoordinates(VERIFIED_LOCATIONS.gaya.latitude, VERIFIED_LOCATIONS.gaya.longitude),
     primaryIssue: 'Sub-centre distance >12km in rural tracts with zero emergency ambulance transit',
     trendVelocity: '→ Steady (±2% MoM)',
     whyItMatters: 'Primary healthcare centers report severe medical staff vacancies combined with broken feeder corridors, tripling maternal delivery transit times.'
+  },
+  {
+    id: 'muzaffarpur',
+    name: 'Muzaffarpur Corridor',
+    state: 'Bihar',
+    district: 'Muzaffarpur',
+    cluster: 'Sakra & Kurhani Blocks',
+    sector: 'Electricity & Power',
+    gapScore: 73,
+    gapStatus: 'MEDIUM',
+    citizenRequests: 685,
+    exposedPopulation: 58000,
+    villagesCount: 16,
+    demandIndex: 75,
+    infraBaseline: 42,
+    investmentCoverage: 44,
+    urgencyScore: 78,
+    vulnerabilityScore: 62,
+    latitude: VERIFIED_LOCATIONS.muzaffarpur.latitude,
+    longitude: VERIFIED_LOCATIONS.muzaffarpur.longitude,
+    coordinates: geoToSvgCoordinates(VERIFIED_LOCATIONS.muzaffarpur.latitude, VERIFIED_LOCATIONS.muzaffarpur.longitude),
+    primaryIssue: 'Transformer breakdowns and 11kV agricultural feeder outages',
+    trendVelocity: '↑ Emerging (+12% MoM)',
+    whyItMatters: 'Recurring distribution transformer overloads during peak irrigation cycles cause frequent power cuts, stalling tube wells across 16 villages.'
   },
   {
     id: 'murshidabad',
@@ -105,7 +139,9 @@ export const HOTSPOTS: Hotspot[] = [
     investmentCoverage: 49,
     urgencyScore: 74,
     vulnerabilityScore: 58,
-    coordinates: { x: 498, y: 265 },
+    latitude: VERIFIED_LOCATIONS.murshidabad.latitude,
+    longitude: VERIFIED_LOCATIONS.murshidabad.longitude,
+    coordinates: geoToSvgCoordinates(VERIFIED_LOCATIONS.murshidabad.latitude, VERIFIED_LOCATIONS.murshidabad.longitude),
     primaryIssue: 'Embankment soil degradation & damaged river-crossing bridges',
     trendVelocity: '↑ Emerging (+9% MoM)',
     whyItMatters: 'Riverbank erosion regularly compromises regional culverts connecting agricultural mandis with highway NH-12.'
@@ -127,7 +163,9 @@ export const HOTSPOTS: Hotspot[] = [
     investmentCoverage: 36,
     urgencyScore: 89,
     vulnerabilityScore: 75,
-    coordinates: { x: 265, y: 275 },
+    latitude: VERIFIED_LOCATIONS.barmer.latitude,
+    longitude: VERIFIED_LOCATIONS.barmer.longitude,
+    coordinates: geoToSvgCoordinates(VERIFIED_LOCATIONS.barmer.latitude, VERIFIED_LOCATIONS.barmer.longitude),
     primaryIssue: 'Canal spur desilting backlog and solar pump inverter breakdowns',
     trendVelocity: '↑ Emerging (+14% MoM)',
     whyItMatters: 'Extreme heat conditions combined with delayed tank supply rotations create severe water stress across pastoral hamlets.'
@@ -149,7 +187,9 @@ export const HOTSPOTS: Hotspot[] = [
     investmentCoverage: 72,
     urgencyScore: 52,
     vulnerabilityScore: 40,
-    coordinates: { x: 355, y: 460 },
+    latitude: VERIFIED_LOCATIONS.wayanad.latitude,
+    longitude: VERIFIED_LOCATIONS.wayanad.longitude,
+    coordinates: geoToSvgCoordinates(VERIFIED_LOCATIONS.wayanad.latitude, VERIFIED_LOCATIONS.wayanad.longitude),
     primaryIssue: 'Slope stabilization needed along tributary access switchbacks',
     trendVelocity: '↓ Decreasing (-5% MoM)',
     whyItMatters: 'Recent state disaster relief tenders have actively addressed culvert reconstruction, keeping net development gap low.'

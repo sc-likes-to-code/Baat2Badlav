@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { HOTSPOTS, Hotspot } from '../data/mockData';
+import { SPATIAL_CORRIDORS } from '../utils/geoProjection';
 import { CitizenSubmission, CitizenAIInterpretation } from '../types/citizen';
 import { DemandIntelligenceSection } from '../components/DemandIntelligenceSection';
 
@@ -330,64 +331,68 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 }}
               ></div>
 
-              {/* Stylized Geospatial Vector of India */}
+              {/* Real Geographic Map of India with Analytical Overlays */}
               <svg
-                className="w-full h-full max-h-[560px] object-contain drop-shadow-sm transition-transform duration-500 ease-out"
-                viewBox="0 0 800 600"
+                className="w-full h-full max-h-[580px] object-contain drop-shadow-sm transition-transform duration-500 ease-out"
+                viewBox="0 0 884 1024"
                 style={{ transform: `scale(${zoomLevel})` }}
               >
                 <defs>
                   <radialGradient cx="50%" cy="50%" id="hotspot-glow-high" r="50%">
-                    <stop offset="0%" stopColor="#ba1a1a" stopOpacity="0.8"></stop>
-                    <stop offset="60%" stopColor="#ba1a1a" stopOpacity="0.2"></stop>
+                    <stop offset="0%" stopColor="#ba1a1a" stopOpacity="0.85"></stop>
+                    <stop offset="60%" stopColor="#ba1a1a" stopOpacity="0.25"></stop>
                     <stop offset="100%" stopColor="#ba1a1a" stopOpacity="0"></stop>
                   </radialGradient>
                   <radialGradient cx="50%" cy="50%" id="hotspot-glow-amber" r="50%">
-                    <stop offset="0%" stopColor="#fe843e" stopOpacity="0.8"></stop>
-                    <stop offset="70%" stopColor="#fe843e" stopOpacity="0.2"></stop>
+                    <stop offset="0%" stopColor="#fe843e" stopOpacity="0.85"></stop>
+                    <stop offset="70%" stopColor="#fe843e" stopOpacity="0.25"></stop>
                     <stop offset="100%" stopColor="#fe843e" stopOpacity="0"></stop>
                   </radialGradient>
                 </defs>
 
-                {/* Stylized India Landmass Outline */}
-                <path
-                  className="transition-colors hover:fill-[#e2e2e5]"
-                  d="M 280,70 L 350,60 L 400,100 L 410,140 L 490,170 L 520,200 L 560,195 L 610,210 L 610,240 L 550,260 L 540,290 L 510,310 L 460,300 L 470,360 L 440,430 L 410,480 L 380,520 L 370,490 L 340,440 L 310,380 L 270,320 L 240,260 L 230,200 L 260,140 Z"
-                  fill="#e8e8ea"
-                  stroke="#c4c5d6"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                ></path>
+                {/* Base Layer: Verified Geographic India Map Image */}
+                <image
+                  href="/india_map.jpg"
+                  x="0"
+                  y="0"
+                  width="884"
+                  height="1024"
+                  preserveAspectRatio="xMidYMid meet"
+                  opacity="0.95"
+                />
 
-                {/* State Internal Boundaries */}
-                <path d="M 240,260 L 300,240 L 320,290 L 270,320 Z" fill="#eeeef0" stroke="#dadadc" strokeWidth="1.5"></path>
-                <path d="M 370,200 L 460,200 L 470,250 L 390,260 Z" fill="#eeeef0" stroke="#dadadc" strokeWidth="1.5"></path>
-                {/* West Bengal Highlight */}
-                <path
-                  className="cursor-pointer"
-                  d="M 480,240 L 515,245 L 530,295 L 510,340 L 485,320 L 490,270 Z"
-                  fill="#dce1ff"
-                  stroke="#2e54c7"
-                  strokeWidth="2"
-                ></path>
-                <path d="M 460,300 L 500,325 L 480,390 L 440,360 Z" fill="#eeeef0" stroke="#dadadc" strokeWidth="1.5"></path>
-                <path d="M 340,440 L 365,460 L 360,510 L 345,490 Z" fill="#eeeef0" stroke="#dadadc" strokeWidth="1.5"></path>
+                {/* Sub-Regional Analytical Corridors (Connecting Related Clusters) */}
+                {SPATIAL_CORRIDORS.map((corridor) => {
+                  const fromH = filteredHotspots.find((h) => h.id === corridor.fromId) || HOTSPOTS.find((h) => h.id === corridor.fromId);
+                  const toH = filteredHotspots.find((h) => h.id === corridor.toId) || HOTSPOTS.find((h) => h.id === corridor.toId);
+                  if (!fromH || !toH) return null;
 
-                {/* Major River Traces */}
-                <path
-                  d="M 440,210 Q 480,240 500,290 T 510,330"
-                  fill="none"
-                  stroke="#90e6dc"
-                  strokeDasharray="3,3"
-                  strokeLinecap="round"
-                  strokeWidth="2"
-                ></path>
+                  return (
+                    <g key={corridor.id} className="pointer-events-none">
+                      <line
+                        x1={fromH.coordinates.x}
+                        y1={fromH.coordinates.y}
+                        x2={toH.coordinates.x}
+                        y2={toH.coordinates.y}
+                        stroke="#033aaf"
+                        strokeWidth="2.5"
+                        strokeDasharray="5 5"
+                        strokeOpacity="0.55"
+                        strokeLinecap="round"
+                      />
+                    </g>
+                  );
+                })}
 
-                {/* Interactive Hotspot Nodes */}
+                {/* Interactive Hotspot Nodes (Positioned via Real Geographic Coordinates) */}
                 {filteredHotspots.map((h) => {
                   const isSelected = selectedHotspot.id === h.id;
                   const glowId = h.gapScore >= 80 ? 'url(#hotspot-glow-high)' : 'url(#hotspot-glow-amber)';
                   const dotColor = h.gapScore >= 80 ? '#ba1a1a' : h.gapScore >= 50 ? '#fe843e' : '#006962';
+
+                  // Dynamic tooltip translation to prevent clipping near canvas edges
+                  const tooltipOffsetX = h.coordinates.x > 620 ? -188 : 18;
+                  const tooltipOffsetY = h.coordinates.y < 90 ? 15 : -28;
 
                   return (
                     <g
@@ -398,42 +403,48 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                       {isSelected ? (
                         <>
                           {/* Concentric sonar pulses */}
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="none" opacity="0.6" r="28" stroke="#ba1a1a" strokeWidth="1.5">
-                            <animate attributeName="r" dur="2.4s" repeatCount="indefinite" values="10;34;40"></animate>
-                            <animate attributeName="opacity" dur="2.4s" repeatCount="indefinite" values="0.8;0.3;0"></animate>
+                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="none" opacity="0.6" r="32" stroke="#ba1a1a" strokeWidth="1.5">
+                            <animate attributeName="r" dur="2.4s" repeatCount="indefinite" values="12;36;42"></animate>
+                            <animate attributeName="opacity" dur="2.4s" repeatCount="indefinite" values="0.85;0.3;0"></animate>
                           </circle>
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="18"></circle>
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="#ba1a1a" r="8" stroke="#ffffff" strokeWidth="2"></circle>
+                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="20"></circle>
+                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill="#ba1a1a" r="8" stroke="#ffffff" strokeWidth="2.5"></circle>
 
                           {/* Active Callout Marker Card */}
-                          <g transform={`translate(${h.coordinates.x + 16}, ${h.coordinates.y - 25})`}>
-                            <rect fill="#ffffff" filter="drop-shadow(0 4px 6px rgba(0,0,0,0.15))" height="52" rx="8" width="170" stroke="#e2e2e5"></rect>
-                            <rect fill="#ba1a1a" height="52" rx="2" width="4"></rect>
+                          <g transform={`translate(${h.coordinates.x + tooltipOffsetX}, ${h.coordinates.y + tooltipOffsetY})`}>
+                            <rect fill="#ffffff" filter="drop-shadow(0 4px 8px rgba(0,0,0,0.18))" height="54" rx="8" width="176" stroke="#d5d5dc"></rect>
+                            <rect fill="#ba1a1a" height="54" rx="2" width="4"></rect>
                             <text fill="#1a1c1e" fontFamily="Plus Jakarta Sans" fontSize="12" fontWeight="700" x="12" y="18">
                               {h.name}
                             </text>
-                            <text fill="#ba1a1a" fontFamily="JetBrains Mono" fontSize="10" fontWeight="600" x="12" y="32">
-                              Gap Index: {h.gapScore}/100
+                            <text fill="#ba1a1a" fontFamily="JetBrains Mono" fontSize="10" fontWeight="600" x="12" y="33">
+                              Gap Index: {h.gapScore}/100 · {h.state}
                             </text>
-                            <text fill="#444653" fontFamily="Plus Jakarta Sans" fontSize="9.5" x="12" y="44">
+                            <text fill="#444653" fontFamily="Plus Jakarta Sans" fontSize="9.5" x="12" y="46">
                               {h.citizenRequests.toLocaleString()} Requests · {h.sector.split(' ')[0]}
                             </text>
                           </g>
                         </>
                       ) : (
                         <>
-                          <circle className="animate-pulse" cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="14"></circle>
-                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={dotColor} r="5"></circle>
+                          <circle className="animate-pulse" cx={h.coordinates.x} cy={h.coordinates.y} fill={glowId} r="15"></circle>
+                          <circle cx={h.coordinates.x} cy={h.coordinates.y} fill={dotColor} r="5.5" stroke="#ffffff" strokeWidth="1.5"></circle>
                           <text
                             fill="#1a1c1e"
                             fontFamily="Plus Jakarta Sans"
                             fontSize="11"
-                            fontWeight="600"
+                            fontWeight="700"
                             textAnchor="middle"
                             x={h.coordinates.x}
                             y={h.coordinates.y - 12}
+                            style={{
+                              paintOrder: 'stroke fill',
+                              stroke: '#ffffff',
+                              strokeWidth: '3px',
+                              strokeLinejoin: 'round',
+                            }}
                           >
-                            {h.name.split(' ')[0]}
+                            {h.district}
                           </text>
                         </>
                       )}
@@ -536,7 +547,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 <div className="w-full bg-stone-100 rounded-full h-2 overflow-hidden">
                   <div className="bg-[#ba1a1a] h-full rounded-full" style={{ width: `${selectedHotspot.demandIndex}%` }}></div>
                 </div>
-                <p className="text-[11px] text-[#747685]">High concentration of verified voice transcripts</p>
+                <p className="text-[11px] text-[#747685]">Demonstration citizen demand signals</p>
               </div>
 
               {/* Infra */}
@@ -586,7 +597,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 {selectedHotspot.whyItMatters}
               </p>
               <p className="text-[10px] font-mono text-[#063baf] pt-1">
-                AI-assisted civic correlation · Verified against GIS road surveys
+                Deterministic gap correlation · Demonstration infrastructure baseline
               </p>
             </div>
 
@@ -929,7 +940,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               </div>
 
               <p className="text-[11px] font-mono text-[#747685]">
-                Each point represents an aggregated cluster of at least 50 validated constituent testimonies cross-referenced with public GIS indices.
+                Each point represents an aggregated cluster of demonstration citizen signals modeled against baseline infrastructure profiles.
               </p>
             </div>
           </div>
@@ -961,7 +972,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               <div>
                 <h3 className="text-base font-bold text-[#1a1c1e]">Citizen Demand</h3>
                 <p className="text-xs text-[#444653] mt-1.5 leading-relaxed">
-                  What communities are experiencing. Multilingual audio transcripts and localized SMS parsed for recurring civic themes.
+                  What communities are experiencing. Multilingual audio transcripts and localized submissions parsed for recurring civic themes.
                 </p>
               </div>
               <span className="text-[11px] font-mono text-[#033aaf] font-semibold">ASR + Dialect NER Filtered</span>
@@ -978,10 +989,10 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               <div>
                 <h3 className="text-base font-bold text-[#1a1c1e]">Infrastructure</h3>
                 <p className="text-xs text-[#444653] mt-1.5 leading-relaxed">
-                  What physical capacity exists. PMGSY road networks, Jal Jeevan tap connections, and PHC distance rasters.
+                  What physical capacity exists. Sector road networks, Jal Jeevan tap connections, and PHC distance rasters.
                 </p>
               </div>
-              <span className="text-[11px] font-mono text-[#004f49] font-semibold">GIS Road Registry Baseline</span>
+              <span className="text-[11px] font-mono text-[#004f49] font-semibold">Synthetic Infrastructure Baseline</span>
             </div>
 
             {/* Stage 3 */}
