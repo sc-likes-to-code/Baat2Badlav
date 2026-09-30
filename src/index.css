@@ -17,7 +17,7 @@
 
   html {
     font-family: var(--font-sans);
-    overflow-x: hidden;
+    overflow-x: clip;
     scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: #c4c5d6 transparent;
@@ -26,7 +26,7 @@
   body {
     background-color: var(--brand-ivory);
     color: var(--brand-dark);
-    overflow-x: hidden;
+    overflow-x: clip;
     min-height: 100vh;
   }
 
