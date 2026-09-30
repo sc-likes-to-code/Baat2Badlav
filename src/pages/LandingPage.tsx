@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { HOTSPOTS } from '../data/mockData';
 
 interface LandingPageProps {
@@ -8,6 +8,41 @@ interface LandingPageProps {
 export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
   const [activeStep, setActiveStep] = useState<number>(0);
   const [playingSample, setPlayingSample] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const handleToggleAudio = (id: string, src: string) => {
+    if (playingSample === id) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      setPlayingSample(null);
+    } else {
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      const audio = new Audio(src);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setPlayingSample(null);
+      };
+      audio.onerror = () => {
+        setPlayingSample(null);
+      };
+      audio.play().catch(() => {
+        setPlayingSample(null);
+      });
+      setPlayingSample(id);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
 
   const pipelineSteps = [
     {
@@ -77,7 +112,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
       id: 'bengali-nadia',
       lang: 'Bengali (বাংলা)',
       region: 'Nadia, West Bengal',
-      audioText: '"আমাদের এলাকায় বর্ষাকালে রাস্তা পুরোপুরি ডুবে যায়। মায়েরা হাসপাতালে যেতে পারে না..."',
+      audioSrc: '/audio/bengali_nadia.m4a',
+      audioText: '"আমাদের এলাকায় বর্ষাকালে রাস্তা পুরোপুরি ডুবে যায়। মায়েরা হাসপাতালে যেতে পারে না..."',
       translation: '"In our area during monsoons, the road completely submerges. Expectant mothers cannot reach the sub-centre hospital..."',
       sector: 'Roads & Mobility',
       urgency: 'Seasonal High',
@@ -86,7 +122,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
       id: 'hindi-gaya',
       lang: 'Hindi (हिन्दी)',
       region: 'Gaya, Bihar',
-      audioText: '"हैंडपंप का पानी बिल्कुल लाल और बालू जैसा निकलता है। बच्चे बीमार पड़ रहे हैं..."',
+      audioSrc: '/audio/hindi_gaya.m4a',
+      audioText: '"हैंडपंप का पानी बिल्कुल लाल और बालू जैसा निकलता है। बच्चे बीमार पड़ रहे हैं..."',
       translation: '"The handpump water runs red with sediment. Schoolchildren are falling sick with stomach ailments every week..."',
       sector: 'Water Access',
       urgency: 'Immediate Deficit',
@@ -95,6 +132,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
       id: 'odia-kalahandi',
       lang: 'Odia (ଓଡ଼ିଆ)',
       region: 'Kalahandi, Odisha',
+      audioSrc: '/audio/odia_kalahandi.m4a',
       audioText: '"ସବୁଦିନ ପାୱାର କଟିଂ ହେଉଛି, ଗ୍ରୀଷ୍ମରେ କ୍ଲିନିକ୍ ଔଷଧ ନଷ୍ଟ ହୋଇଯାଉଛି..."',
       translation: '"Daily unannounced power outages last 8 hours; cold-chain medicines in our primary health centre are spoiling..."',
       sector: 'Healthcare & Power',
@@ -284,11 +322,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                     </span>
                   </div>
 
-                  {/* Play audio button simulation */}
+                  {/* Play audio button */}
                   <div className="bg-[#FAF8F2] border border-[#E4DFD0] rounded-xl p-3.5 my-3 flex items-center gap-3">
                     <button
-                      onClick={() => setPlayingSample(playingSample === sample.id ? null : sample.id)}
-                      className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-colors ${
+                      onClick={() => handleToggleAudio(sample.id, sample.audioSrc)}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
                         playingSample === sample.id
                           ? 'bg-[#D46B28] text-white shadow-xs'
                           : 'bg-[#1B2A32] text-white hover:bg-[#2A3F4B]'
@@ -307,7 +345,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                     </button>
                     <div className="flex-1 overflow-hidden">
                       <div className="text-[11px] font-semibold text-[#1B2A32]">
-                        {playingSample === sample.id ? 'Simulating Playback...' : 'Listen Original Dialect'}
+                        {playingSample === sample.id ? 'Playing Audio...' : 'Listen Original Dialect'}
                       </div>
                       <div className="flex items-center gap-1 mt-1">
                         {[40, 75, 20, 90, 60, 30, 85, 45, 95, 35, 70, 50].map((h, i) => (
